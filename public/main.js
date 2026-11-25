@@ -163,6 +163,25 @@ function connect(profile) {
     } else if (m.t === 'state') {
       const p = players.get(m.id);
       if (p) norm(Object.assign(p, { status: m.status, muted: m.muted, camOff: m.camOff, item: m.item, ride: m.ride, screen: m.screen, dance: m.dance }));
+    } else if (m.t === 'emote') {
+      const p = players.get(m.id);
+      if (p) p.emoteUntil = performance.now() + 1800;
+    } else if (m.t === 'poke') {
+      const p = players.get(m.from);
+      if (m.kind === 'wave') { toast(`${m.name} waved at you 👋`); sound.play('wave'); }
+      else {
+        sound.play('invite');
+        toast(`${m.name} invited you over`, [
+          { label: 'Go over', go: true, run: () => { const q = players.get(m.from); if (q) walkTo(q); else toast(`${m.name} has left.`); } },
+          { label: 'Not now', run: () => {} },
+        ], 20000);
+      }
+      if (p) p.emoteUntil = m.kind === 'wave' ? p.emoteUntil : performance.now() + 1800;
+    } else if (m.t === 'poke-result') {
+      const p = players.get(m.to);
+      const who = p?.name || 'They';
+      if (!m.ok) toast(`${who} is ${m.reason === 'busy' ? 'set to Busy' : 'in a meeting'}, so they weren't disturbed.`);
+      else if (m.kind === 'invite') toast(`Invite sent to ${who}.`);
     } else if (m.t === 'chat') {
       const p = players.get(m.id);
       if (p) p.bubble = { text: m.text, until: performance.now() + 6000 };
@@ -253,6 +272,98 @@ function setDance(on) {
   sendState();
 }
 $('btnDance').onclick = () => setDance(!me?.dance);
+
+// ---------- waving, inviting and following ----------
+// Who (other than you) is under the mouse, by how close their figure is on screen.
+function personAt(cx, cy) {
+  let best = null, bestD = 34;
+  for (const p of players.values()) {
+    if (p === me) continue;
+    const c = chairOf(p);
+    for (const z of [0.4, 0.9, 1.4]) {
+      const s = scene.screenOf(c ? c.x + 0.5 : p.x, c ? c.y + 0.5 : p.y, z);
+      if (!s.visible) continue;
+      const d = Math.hypot(s.x - cx, s.y - cy);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+  }
+  return best;
+}
+let menuFor = null;
+function openPersonMenu(p, x, y) {
+  menuFor = p.id;
+  $('pmName').textContent = p.name;
+  $('pmFollow').textContent = me.follow === p.id ? 'Stop following' : 'Follow';
+  const m = $('personMenu');
+  m.hidden = false;
+  m.style.left = `${Math.min(x + 12, innerWidth - m.offsetWidth - 10)}px`;
+  m.style.top = `${Math.min(y - 10, innerHeight - m.offsetHeight - 90)}px`;
+}
+function closePersonMenu() { $('personMenu').hidden = true; menuFor = null; }
+$('pmWave').onclick = () => {
+  const p = players.get(menuFor); closePersonMenu();
+  if (!p) return;
+  send({ t: 'poke', to: p.id, kind: 'wave' });
+  me.emoteUntil = performance.now() + 1800; // see yourself wave straight away
+  sound.play('wave');
+};
+$('pmInvite').onclick = () => { const p = players.get(menuFor); closePersonMenu(); if (p) send({ t: 'poke', to: p.id, kind: 'invite' }); };
+$('pmFollow').onclick = () => { const p = players.get(menuFor); closePersonMenu(); if (!p) return; if (me.follow === p.id) stopFollowing(); else startFollowing(p); };
+$('followStop').onclick = () => stopFollowing();
+addEventListener('keydown', (e) => { if (e.key === 'Escape') closePersonMenu(); });
+
+// Walk to a free square right next to someone.
+function walkTo(p) {
+  const from = tileOf(me), tx = Math.floor(p.tx ?? p.x), ty = Math.floor(p.ty ?? p.y);
+  const path = findPath(from, (a, b) => Math.abs(a - tx) + Math.abs(b - ty) === 1);
+  if (path) { me.path = path; me.dance = false; pending = null; return true; }
+  return false;
+}
+function startFollowing(p) {
+  me.follow = p.id;
+  me.followCheck = 0;
+  $('followingName').textContent = `Following ${p.name}`;
+  $('following').style.display = 'flex';
+}
+function stopFollowing() {
+  if (!me?.follow) return;
+  me.follow = null;
+  $('following').style.display = 'none';
+}
+// Called every frame: keep a few steps behind whoever we're following.
+function keepFollowing(dt) {
+  if (!me?.follow) return;
+  const p = players.get(me.follow);
+  if (!p) { toast('The person you were following has left.'); return stopFollowing(); }
+  me.followCheck -= dt;
+  if (me.followCheck > 0) return;
+  me.followCheck = 0.4;
+  const d = Math.hypot((p.tx ?? p.x) - me.x, (p.ty ?? p.y) - me.y);
+  if (d > 1.6) walkTo(p);
+}
+
+// Little messages in the top-right corner, with optional buttons.
+function toast(text, actions = [], ms = 6000) {
+  const t = document.createElement('div');
+  t.className = 'toast';
+  const msg = document.createElement('div');
+  msg.textContent = text;
+  t.append(msg);
+  if (actions.length) {
+    const row = document.createElement('div');
+    row.className = 'acts';
+    for (const a of actions) {
+      const b = document.createElement('button');
+      b.textContent = a.label;
+      if (a.go) b.className = 'go';
+      b.onclick = () => { t.remove(); a.run(); };
+      row.append(b);
+    }
+    t.append(row);
+  }
+  $('toasts').append(t);
+  setTimeout(() => t.remove(), ms);
+}
 $('btnSound').onclick = () => { sound.setMuted(!sound.isMuted()); if (me) applyMedia(); };
 $('btnDecor').onclick = () => openDecor();
 
@@ -549,10 +660,15 @@ function mouseTile(e) {
 }
 // Desks, bots and rides are picked by their whole 3D shape, nearest the camera first.
 const pickObject = (e) => scene.pick(objects.filter((o) => o.kind), e.clientX, e.clientY);
-canvas.addEventListener('mousemove', (e) => { hover = mouseTile(e); hoverObject = pickObject(e); });
+canvas.addEventListener('mousemove', (e) => {
+  canvas.style.cursor = me && personAt(e.clientX, e.clientY) ? 'context-menu' : 'pointer'; hover = mouseTile(e); hoverObject = pickObject(e); });
 canvas.addEventListener('mouseleave', () => { hover = null; hoverObject = null; });
 canvas.addEventListener('click', (e) => {
   if (!me) return;
+  closePersonMenu();
+  const who = personAt(e.clientX, e.clientY);
+  if (who) return openPersonMenu(who, e.clientX, e.clientY);
+  stopFollowing(); // clicking somewhere to walk takes over from following
   const [i, j] = mouseTile(e);
   const o = pickObject(e);
   const from = tileOf(me);
@@ -717,7 +833,7 @@ function update(dt, now) {
     else if (keys.has('arrowdown') || keys.has('s')) step = [i, j + 1];
     else if (keys.has('arrowleft') || keys.has('a')) step = [i - 1, j];
     else if (keys.has('arrowright') || keys.has('d')) step = [i + 1, j];
-    if (step && walkable(step[0], step[1])) { me.path = [step]; pending = null; }
+    if (step && walkable(step[0], step[1])) { me.path = [step]; pending = null; stopFollowing(); }
   }
   let moved = false;
   let budget = (me.ride ? RIDES[me.ride].speed : 5.5) * dt;
@@ -735,6 +851,7 @@ function update(dt, now) {
     else { me.x += (dx / dist) * budget; me.y += (dy / dist) * budget; budget = 0; }
     moved = true;
   }
+  keepFollowing(dt);
   if (moved && me.dance) setDance(false); // walking off stops the dancing
   // footsteps (not on rides), about two a second
   if (moved && !me.ride) { me.stepClock = (me.stepClock || 0) + dt; if (me.stepClock > 0.32) { me.stepClock = 0; sound.play('step'); } }
@@ -864,6 +981,7 @@ function drawLabels(now, distance) {
     const showStatus = p.meeting && !atDesk.has(p);
     if (showStatus) pill(STATUS[p.status].label, s.x, s.y - 19, STATUS[p.status].color);
     if (p.bubble && p.bubble.until > now) bubble(p.bubble.text, s.x, s.y - (showStatus ? 34 : 15));
+    else if (p.emoteUntil && p.emoteUntil > now) bubble('👋', s.x, s.y - (showStatus ? 34 : 15));
   }
 }
 

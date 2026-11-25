@@ -389,6 +389,12 @@ export function createScene(glCanvas) {
         tilt = Math.cos(beat) * 0.08;
         spin = phase > 0.85 ? ((phase - 0.85) / 0.15) * Math.PI * 2 : Math.sin(beat / 2) * 0.35;
       }
+      if (p.emoteUntil && p.emoteUntil > performance.now()) {
+        // waving: a happy little hop and a wiggle
+        const k = (p.emoteUntil - performance.now()) / 1800;
+        bob = Math.max(bob, Math.abs(Math.sin(k * Math.PI * 4)) * 0.18);
+        lean = Math.sin(k * Math.PI * 8) * 0.12;
+      }
       e.group.rotation.y = e.angle + spin;
       e.group.position.set(chair ? chair.x + 0.5 : p.x, bob, chair ? chair.y + 0.5 : p.y);
       e.group.rotation.z = lean;

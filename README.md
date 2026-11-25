@@ -90,6 +90,7 @@ Two cabinets in The Afterworks run Lead Volley, a 1v1 paddle game. The first per
 ## Dancing, sound and decorating
 
 - **Dance:** V or the Dance button. Everyone sees it.
+- **Wave, invite over, follow:** click another person for the menu. Waves and invites aren't delivered to people set to In a meeting or Busy, and each person can send one every 2 seconds.
 - **Sound:** made in the browser in `public/sound.js` (no audio files), including an original loop for the dance floor. The Sound button mutes it.
 - **Decorate:** the Decorate button lets anyone ask the AI to dress the shared space they're standing in. Decorations are visual only (they never block anyone), are saved in the data folder, and reset after 24 hours. The areas are listed in `DECOR_AREAS` in `public/world.js`.
 
