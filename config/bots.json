@@ -63,7 +63,8 @@
     ],
     "notion": [
       "https://app.notion.com/p/Account-Project-Management-Resource-Hub-8f98acd4b84f43a08b5b78be2cd1edbb"
-    ]
+    ],
+    "followLinks": true
   },
   {
     "id": "strategy",

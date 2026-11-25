@@ -169,7 +169,7 @@ async function syncNotion() {
       if (!bot.notion?.length) continue;
       try {
         const started = Date.now();
-        notionCache[bot.id] = await readBotSources(bot.notion, notionCache[bot.id]);
+        notionCache[bot.id] = await readBotSources(bot.notion, notionCache[bot.id], { followLinks: bot.followLinks === true });
         const c = notionCache[bot.id];
         const chars = c.sections.reduce((n, x) => n + x.text.length, 0);
         console.log(`Notion: ${bot.name} has ${c.items} page(s), ${chars} characters, in ${Math.round((Date.now() - started) / 1000)}s.${c.notes.length ? ' ' + c.notes.join(' ') : ''}`);

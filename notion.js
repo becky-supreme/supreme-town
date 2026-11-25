@@ -1,10 +1,11 @@
 // Reads Notion boards and pages into plain text so a bot can answer from them.
 // A bot lists its sources in config/bots.json as "notion": ["<link or id>", ...].
 //
-// Starting from each source, it follows everything the page points to: pages and
-// boards inside it, links to other pages, and @-mentions of pages in the text. So
-// a hub page that links out to processes kept elsewhere in Notion is read in full,
-// as long as the integration can see those pages too.
+// Starting from each source, it reads the pages and boards inside it. A bot with
+// "followLinks": true in config/bots.json also follows links and @-mentions to pages
+// kept elsewhere in Notion, so a hub that points out to other pages is read in full.
+// That widens what the bot can repeat to anyone signed in, so it is off by default
+// and limited to whatever the Notion connection has been given access to.
 //
 // Each page is kept as its own section, so a bot can be handed just the pages that
 // matter to a question (see pickSections). Pages that haven't changed since the
@@ -131,8 +132,8 @@ async function readBlocks(blockId, depth, links) {
       links.pages.push(...mentionedPages(b.rich_text));
       links.boards.push(...mentionedBoards(b.rich_text));
       if (block.type === 'table_row') for (const cell of b.cells || []) { links.pages.push(...mentionedPages(cell)); links.boards.push(...mentionedBoards(cell)); }
-      if (block.type === 'child_page') links.pages.push(norm(block.id));
-      if (block.type === 'child_database') links.boards.push(norm(block.id));
+      if (block.type === 'child_page') { links.pages.push(norm(block.id)); links.children.push(`page:${norm(block.id)}`); }
+      if (block.type === 'child_database') { links.boards.push(norm(block.id)); links.children.push(`board:${norm(block.id)}`); }
       if (block.type === 'link_to_page') {
         if (b.type === 'page_id') links.pages.push(norm(b.page_id));
         if (b.type === 'database_id') links.boards.push(norm(b.database_id));
@@ -147,7 +148,7 @@ async function readBlocks(blockId, depth, links) {
 
 // previous: the cache from the last sync, { pages: { id: { edited, title, text, links } } }
 // Returns { sections: [{ id, title, text }], pages, items, notes, syncedAt }.
-export async function readBotSources(sources, previous = {}) {
+export async function readBotSources(sources, previous = {}, { followLinks = false } = {}) {
   const notes = [];
   const oldPages = previous.pages || {};
   const pages = {};
@@ -179,7 +180,7 @@ export async function readBotSources(sources, previous = {}) {
     if (old && old.edited === page.last_edited_time) {
       entry = old; // unchanged since last time
     } else {
-      const links = { pages: [], boards: [] };
+      const links = { pages: [], boards: [], children: [] };
       let text = await readBlocks(id, 0, links);
       if (text.length > MAX_PAGE_CHARS) text = text.slice(0, MAX_PAGE_CHARS) + '\n(…the rest of this page was left out because it is very long)';
       const props = pageProperties(page);
@@ -187,8 +188,10 @@ export async function readBotSources(sources, previous = {}) {
     }
     pages[id] = entry;
     order.push(id);
-    for (const p of entry.links.pages) push('page', p);
-    for (const b of entry.links.boards) push('board', b);
+    // Pages and boards nested inside this one are always read; links elsewhere only when allowed.
+    const kids = new Set(entry.links.children || []);
+    for (const p of entry.links.pages) if (followLinks || kids.has(`page:${p}`)) push('page', p);
+    for (const b of entry.links.boards) if (followLinks || kids.has(`board:${b}`)) push('board', b);
   }
 
   for (let i = 0; i < queue.length; i++) {
