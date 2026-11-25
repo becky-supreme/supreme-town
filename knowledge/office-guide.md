@@ -16,5 +16,8 @@
 - **Non-working social lunch:** the lunch tables next to the kitchen. No work talk.
 - **Meeting room:** the glass room at the far end of the back wall. Everyone inside hears each other at full volume and nobody outside can hear in.
 - **Rides:** go-karts, bikes, scooters and hoverboards are parked at the entrance and along the second street. Press E to hop on and X to hop off.
+- **Dancing:** press V, or the Dance button, to dance. It works anywhere, and on the dance floor in The Afterworks there's music. Walking stops the dancing.
+- **Sound:** footsteps, hopping on rides, grabbing drinks, the arcade and people walking in all make little sounds, and the dance floor plays music that gets louder as you get closer. The Sound button in the bottom bar turns it all off. It also goes quiet when you're In a meeting or Busy.
+- **Decorating:** walk into a shared space (the lounge, the bar, the lunch area, the kitchen, the meeting room, the entrance or a team area) and press Decorate. Describe what you want, for example "it's Sam's birthday, balloons and a HAPPY BIRTHDAY SAM sign", and the AI dresses the whole area for everyone. It goes back to normal by itself after a day, or straight away with the "back to normal" button.
 - **Text chat:** type in the box at the bottom. Everyone in town sees it.
 - **Characters:** when you come in you choose an outfit (including costumes), a hairstyle and colours.

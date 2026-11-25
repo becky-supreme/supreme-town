@@ -37,6 +37,7 @@ const leadVolley = {
         b.vy = Math.sin(angle) * speed;
         b.x = px + (side === 0 ? 1 : -1) * (BALL + PAD_W / 2);
         s.rally++;
+        s.hit = (s.hit || 0) + 1;
       }
     }
     const scorer = b.x < -20 ? 1 : b.x > FW + 20 ? 0 : -1;
@@ -82,7 +83,7 @@ function cpuTarget(s, side) {
   return coming ? s.ball.y : FH / 2;
 }
 
-export function createArcade({ send, myId }) {
+export function createArcade({ send, myId, sfx = () => {} }) {
   const game = leadVolley;
   let cab = null; // the cabinet we are at
   let seats = []; // [{ id, name }], host first
@@ -90,6 +91,7 @@ export function createArcade({ send, myId }) {
   let remoteInput = null; // the guest's paddle, as last heard by the host
   let myTarget = FH / 2;
   let lastSend = 0;
+  let lastSig = '';
   const keys = new Set();
 
   // ---- the screen ----
@@ -168,6 +170,13 @@ export function createArcade({ send, myId }) {
       } else if (now - lastSend > 33) { send({ t: 'arcade', op: 'input', cab, y: myTarget }); lastSend = now; }
       const names = [seats[0]?.name || 'Player 1', versus ? seats[1].name : 'Computer'];
       status.textContent = versus ? `${names[0]} vs ${names[1]}` : 'Playing the computer. Anyone who walks up to this cabinet joins in.';
+      // sounds, worked out from the game picture so both players hear them
+      const sig = `${state.hit || 0}|${state.score[0]}-${state.score[1]}|${state.over ?? ''}`;
+      if (lastSig && sig !== lastSig) {
+        const [h0, s0, o0] = lastSig.split('|'), [h1, s1, o1] = sig.split('|');
+        if (o1 !== o0 && o1 !== '') sfx('win'); else if (s1 !== s0) sfx('score'); else if (h1 !== h0) sfx('blip');
+      }
+      lastSig = sig;
       g.setTransform(2, 0, 0, 2, 0, 0);
       game.draw(g, state, names, mySide());
     }

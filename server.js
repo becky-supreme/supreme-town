@@ -9,7 +9,7 @@ import { WebSocketServer } from 'ws';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { DESKS, SPAWNS, W, H, ITEMS, RIDES, staticObjects, zoneOf, isShared, hearRadius } from './public/world.js';
+import { DESKS, SPAWNS, W, H, ITEMS, RIDES, staticObjects, zoneOf, isShared, hearRadius, DECOR_AREAS } from './public/world.js';
 import { PRESETS, BANK, presetFromPrompt, sanitiseDesign } from './public/presets.js';
 import { cleanLook, avatarBoxes, sanitiseCharacter } from './public/avatar.js';
 import { hasNotion, readBotSources, pickSections, friendlyNotionError } from './notion.js';
@@ -95,12 +95,12 @@ Here is an example of the format, a gothic desk:
 ${JSON.stringify(PRESETS.gothic)}`;
 
 // Ask the AI for something built out of boxes. Returns { name, boxes }, or null when there is no AI key.
-async function aiBoxes(system, request) {
+async function aiBoxes(system, request, schema = DESK_JSON_SCHEMA, zodFormat = deskFormat) {
   if (useOpenRouter()) {
     const text = await openRouter({
       max_tokens: 16000,
       messages: [{ role: 'system', content: system }, { role: 'user', content: request }],
-      response_format: { type: 'json_schema', json_schema: { name: 'design', strict: true, schema: DESK_JSON_SCHEMA } },
+      response_format: { type: 'json_schema', json_schema: { name: 'design', strict: true, schema } },
     });
     try { return JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)); } catch { throw new Error("The AI didn't return a design. Try again."); }
   }
@@ -110,7 +110,7 @@ async function aiBoxes(system, request) {
     model: MODEL,
     max_tokens: 16000,
     system,
-    output_config: { effort: 'low', format: deskFormat },
+    output_config: { effort: 'low', format: zodFormat },
     messages: [{ role: 'user', content: request }],
   });
   if (res.stop_reason === 'refusal' || !res.parsed_output) throw new Error('Claude declined that one. Try describing it differently.');
@@ -142,6 +142,70 @@ What makes a good character:
 
 Here is an example of the format, a person in a duck costume:
 ${JSON.stringify({ name: 'Duck costume', boxes: avatarBoxes({ outfit: 'duck', skin: '#f2c9a0' }, 'y+', 0, null, null, true).map(({ x, y, z, w, d, h, color, glow }) => ({ x: +x.toFixed(3), y: +y.toFixed(3), z: +z.toFixed(3), w, d, h, color, glow })) })}`;
+
+// ---------- AI area decorating ----------
+const AREA_JSON_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['name', 'sign', 'signColor', 'floorTint', 'boxes'],
+  properties: {
+    name: { type: 'string' }, sign: { type: 'string' }, signColor: { type: 'string' }, floorTint: { type: 'string' },
+    boxes: DESK_JSON_SCHEMA.properties.boxes,
+  },
+};
+const AreaSchema = z.object({
+  name: z.string(), sign: z.string(), signColor: z.string(), floorTint: z.string(),
+  boxes: DeskSchema.shape.boxes,
+});
+const areaFormat = zodOutputFormat(AreaSchema);
+const areaSystem = (area) => {
+  const w = area.rect.x1 - area.rect.x0 + 1, d = area.rect.y1 - area.rect.y0 + 1;
+  return `You decorate one area of a small 3D virtual office with a friendly, blocky toy look, for an occasion or theme a colleague describes (a birthday, Halloween, a product launch, a team win). The area is "${area.name}". You add decorations built from coloured boxes; the furniture already there stays.
+
+How the space works:
+- The area is ${w} wide (x from 0 to ${w}) and ${d} deep (y from 0 to ${d}). z is height; the ceiling is at 4.
+- Each box is { x, y, z, w, d, h, color, glow }: x, y, z is the corner nearest the origin, w runs along x, d along y, h is height. color is a #rrggbb hex. glow: true makes it light up (fairy lights, neon, candles, lanterns).
+- People walk through this area and there is furniture you can't see, so keep the walking space clear: put decorations up high (z from 2.2 to 3.8: bunting, banners, balloons, streamers, lanterns, disco balls, hanging stars), flat on the floor (h no more than 0.03: confetti, rugs, petals), or small and tucked along the edges (within 0.6 of an edge: balloon clusters, gift piles, pumpkins, pot plants). Nothing in the middle of the floor between z 0.05 and 2.2.
+- Spread decorations across the whole area so it all feels transformed, not just one corner.
+
+Also:
+- sign: a short message to hang above the middle of the area, in capitals, four words at most (for example HAPPY BIRTHDAY SAM). Use an empty string for no sign.
+- signColor: a #rrggbb colour for the sign.
+- floorTint: a #rrggbb colour to wash over the floor to set the mood, or an empty string to leave the floor alone.
+- name: a short title for the decoration, four words at most.
+- Use 60 to 160 boxes. Keep every dimension at 0.02 or more.`;
+};
+function sanitiseAreaDecor(raw, area) {
+  const w = area.rect.x1 - area.rect.x0 + 1, d = area.rect.y1 - area.rect.y0 + 1;
+  const num = (v, lo, hi) => Math.min(hi, Math.max(lo, Number.isFinite(+v) ? +v : lo));
+  const hex = (c) => (/^#[0-9a-fA-F]{6}$/.test(c) ? c : '');
+  const boxes = [];
+  for (const b of Array.isArray(raw?.boxes) ? raw.boxes.slice(0, 200) : []) {
+    const bw = num(b.w, 0.02, Math.min(6, w)), bd = num(b.d, 0.02, Math.min(6, d)), bh = num(b.h, 0.01, 4);
+    boxes.push({ x: num(b.x, 0, w - bw), y: num(b.y, 0, d - bd), z: num(b.z, 0, 4 - bh), w: bw, d: bd, h: bh, color: hex(b.color) || '#ffffff', glow: !!b.glow });
+  }
+  return {
+    name: String(raw?.name || 'Decorations').slice(0, 40),
+    sign: String(raw?.sign || '').replace(/[^\p{L}\p{N} !?&'.,:-]/gu, '').toUpperCase().slice(0, 32),
+    signColor: hex(raw?.signColor) || '#ffd24a',
+    floorTint: hex(raw?.floorTint),
+    boxes,
+  };
+}
+// Decorations are kept for a day, then the area goes back to normal by itself.
+const DECOR_FILE = path.join(DATA, 'area-decor.json');
+const DECOR_HOURS = 24;
+let areaDecor = {};
+try { areaDecor = JSON.parse(fs.readFileSync(DECOR_FILE, 'utf8')); } catch { /* none yet */ }
+function saveAreaDecor() { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(DECOR_FILE, JSON.stringify(areaDecor)); }
+function expireDecor() {
+  for (const [id, dec] of Object.entries(areaDecor)) {
+    if (Date.now() - (dec.at || 0) > DECOR_HOURS * 3_600_000) {
+      delete areaDecor[id];
+      broadcast({ t: 'area', areaId: id, decor: null });
+    }
+  }
+  saveAreaDecor();
+}
+setInterval(expireDecor, 5 * 60_000).unref();
 
 async function designCharacter(prompt) {
   const raw = await aiBoxes(CHARACTER_SYSTEM, `Design this character: ${prompt}`);
@@ -333,7 +397,7 @@ function leaveCabinets(id) {
     tellCabinet(cab);
   }
 }
-const pub = (p) => ({ id: p.id, name: p.name, look: p.look, x: p.x, y: p.y, f: p.f, status: p.status, muted: p.muted, camOff: p.camOff, item: p.item, ride: p.ride, screen: p.screen });
+const pub = (p) => ({ id: p.id, name: p.name, look: p.look, x: p.x, y: p.y, f: p.f, status: p.status, muted: p.muted, camOff: p.camOff, item: p.item, ride: p.ride, screen: p.screen, dance: p.dance });
 function broadcast(msg, exceptId) {
   const s = JSON.stringify(msg);
   for (const p of players.values()) if (p.id !== exceptId && p.ws.readyState === 1) p.ws.send(s);
@@ -402,6 +466,32 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { custom });
       } catch (err) {
         console.error('look error:', err);
+        return json(res, 200, { error: aiErrorMessage(err) });
+      }
+    }
+    if (url.pathname === '/api/area' && req.method === 'POST') {
+      const body = await readJson(req);
+      const area = DECOR_AREAS.find((a) => a.id === body.areaId);
+      if (!area) return json(res, 404, { error: 'No such area.' });
+      if (body.reset) {
+        delete areaDecor[area.id];
+        saveAreaDecor();
+        broadcast({ t: 'area', areaId: area.id, decor: null });
+        return json(res, 200, { ok: true });
+      }
+      const prompt = clean(body.prompt, 300);
+      if (!prompt) return json(res, 200, { error: 'Describe how to decorate it.' });
+      try {
+        const raw = await aiBoxes(areaSystem(area), `Decorate it for: ${prompt}`, AREA_JSON_SCHEMA, areaFormat);
+        if (!raw) return json(res, 200, { error: 'The AI decorator needs an AI key (see the README).' });
+        const decor = sanitiseAreaDecor(raw, area);
+        if (!decor.boxes.length && !decor.sign) return json(res, 200, { error: "The AI didn't return any decorations. Try again." });
+        areaDecor[area.id] = { ...decor, by: email || null, at: Date.now() };
+        saveAreaDecor();
+        broadcast({ t: 'area', areaId: area.id, decor: areaDecor[area.id] });
+        return json(res, 200, { ok: true, name: decor.name });
+      } catch (err) {
+        console.error('area decor error:', err);
         return json(res, 200, { error: aiErrorMessage(err) });
       }
     }
@@ -509,9 +599,9 @@ wss.on('connection', (ws, req) => {
         name: (email && users.get(email)?.name) || clean(m.name, 24) || 'Guest',
         look: (email && users.get(email)?.look) || cleanLook(m.look),
         x: sx + 0.5, y: sy + 0.5, f: 'y+', email,
-        status: ['available', 'meeting', 'busy'].includes(m.status) ? m.status : 'available', muted: !!m.muted, camOff: !!m.camOff, item: ITEMS.includes(m.item) ? m.item : null, ride: Object.hasOwn(RIDES, m.ride) ? m.ride : null, screen: null, ws,
+        status: ['available', 'meeting', 'busy'].includes(m.status) ? m.status : 'available', muted: !!m.muted, camOff: !!m.camOff, item: ITEMS.includes(m.item) ? m.item : null, ride: Object.hasOwn(RIDES, m.ride) ? m.ride : null, screen: null, dance: false, ws,
       };
-      ws.send(JSON.stringify({ t: 'init', id: me.id, you: pub(me), players: [...players.values()].map(pub), desks }));
+      ws.send(JSON.stringify({ t: 'init', id: me.id, you: pub(me), players: [...players.values()].map(pub), desks, areaDecor }));
       players.set(me.id, me);
       broadcast({ t: 'join', player: pub(me) }, me.id);
       return;
@@ -534,7 +624,8 @@ wss.on('connection', (ws, req) => {
       me.item = ITEMS.includes(m.item) ? m.item : null;
       me.ride = Object.hasOwn(RIDES, m.ride) ? m.ride : null;
       me.screen = typeof m.screen === 'string' && m.screen ? m.screen.slice(0, 80) : null;
-      broadcast({ t: 'state', id: me.id, status: me.status, muted: me.muted, camOff: me.camOff, item: me.item, ride: me.ride, screen: me.screen }, me.id);
+      me.dance = !!m.dance;
+      broadcast({ t: 'state', id: me.id, status: me.status, muted: me.muted, camOff: me.camOff, item: me.item, ride: me.ride, screen: me.screen, dance: me.dance }, me.id);
     } else if (m.t === 'chat') {
       const text = clean(m.text, 300);
       if (text) broadcast({ t: 'chat', id: me.id, name: me.name, text });

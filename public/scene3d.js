@@ -364,6 +364,7 @@ export function createScene(glCanvas) {
     for (const p of players) {
       seen.add(p.id);
       const chair = chairOf(p);
+      const dancing = p.dance && !chair && !p.ride && !(p.step > 0);
       const key = JSON.stringify([p.look, p.item, p.ride, chair?.type, p.meeting]);
       let e = people.get(p.id);
       if (!e || e.key !== key) {
@@ -376,11 +377,22 @@ export function createScene(glCanvas) {
       let diff = target - e.angle;
       diff = Math.atan2(Math.sin(diff), Math.cos(diff));
       e.angle += diff * Math.min(1, dt * 14);
-      e.group.rotation.y = e.angle;
       const moving = p.step > 0 && !chair;
-      const bob = moving && !p.ride ? Math.abs(Math.sin(p.step)) * 0.07 : p.ride === 'hoverboard' ? 0.05 + Math.sin(time * 3) * 0.03 : 0;
+      let bob = moving && !p.ride ? Math.abs(Math.sin(p.step)) * 0.07 : p.ride === 'hoverboard' ? 0.05 + Math.sin(time * 3) * 0.03 : 0;
+      let spin = 0, lean = moving && !p.ride ? Math.sin(p.step) * 0.05 : 0, tilt = 0;
+      if (dancing) {
+        // on the beat (118 a minute): bounce, sway, and a spin every few bars
+        const beat = time * (118 / 60) * Math.PI;
+        const phase = ((time * 118) / 60 / 16 + (p.id.charCodeAt(0) % 7) / 7) % 1; // everyone a little out of step
+        bob = Math.abs(Math.sin(beat)) * 0.16;
+        lean = Math.sin(beat) * 0.14;
+        tilt = Math.cos(beat) * 0.08;
+        spin = phase > 0.85 ? ((phase - 0.85) / 0.15) * Math.PI * 2 : Math.sin(beat / 2) * 0.35;
+      }
+      e.group.rotation.y = e.angle + spin;
       e.group.position.set(chair ? chair.x + 0.5 : p.x, bob, chair ? chair.y + 0.5 : p.y);
-      e.group.rotation.z = moving && !p.ride ? Math.sin(p.step) * 0.05 : 0;
+      e.group.rotation.z = lean;
+      e.group.rotation.x = tilt;
     }
     for (const [id, e] of people) if (!seen.has(id)) { scene.remove(e.group); people.delete(id); }
   }
@@ -507,5 +519,32 @@ export function createScene(glCanvas) {
     return best;
   }
 
-  return { setStatic, setDesks, addDecor, syncPeople, setMarkers, render, screenOf, groundAt, pick, setLook };
+  // ---------- area decorations (made by the AI decorator) ----------
+  const areaDecor = new Map(); // area id -> { boxes, tint, sign }
+  function setAreaDecor(area, decor) {
+    const old = areaDecor.get(area.id);
+    if (old) {
+      clearGroup(old.boxes);
+      for (const m of [old.tint, old.sign]) if (m) { scene.remove(m); m.geometry.dispose(); m.material.map?.dispose(); m.material.dispose(); }
+      areaDecor.delete(area.id);
+    }
+    if (!decor) return;
+    const r = area.rect;
+    const entry = {};
+    if (decor.boxes?.length) {
+      entry.boxes = boxGroup(decor.boxes.map((b) => ({ ...b, x: b.x + r.x0, y: b.y + r.y0 })));
+      scene.add(entry.boxes);
+    }
+    if (decor.floorTint) {
+      const w = r.x1 - r.x0 + 1, d = r.y1 - r.y0 + 1;
+      entry.tint = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshBasicMaterial({ color: decor.floorTint, transparent: true, opacity: 0.28, depthWrite: false }));
+      entry.tint.rotation.x = -Math.PI / 2;
+      entry.tint.position.set(r.x0 + w / 2, 0.025, r.y0 + d / 2);
+      scene.add(entry.tint);
+    }
+    if (decor.sign) entry.sign = neon(decor.sign, decor.signColor || '#ffd24a', 'free', (r.x0 + r.x1 + 1) / 2, 3.3, 0.6, (r.y0 + r.y1 + 1) / 2);
+    areaDecor.set(area.id, entry);
+  }
+
+  return { setStatic, setDesks, addDecor, syncPeople, setMarkers, render, screenOf, groundAt, pick, setLook, setAreaDecor };
 }

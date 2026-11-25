@@ -87,6 +87,12 @@ The distances are at the top of `public/world.js`.
 
 Two cabinets in The Afterworks run Lead Volley, a 1v1 paddle game. The first person plays the computer; a second person at the same cabinet makes it head to head. New games go in `public/arcade.js`.
 
+## Dancing, sound and decorating
+
+- **Dance:** V or the Dance button. Everyone sees it.
+- **Sound:** made in the browser in `public/sound.js` (no audio files), including an original loop for the dance floor. The Sound button mutes it.
+- **Decorate:** the Decorate button lets anyone ask the AI to dress the shared space they're standing in. Decorations are visual only (they never block anyone), are saved in the data folder, and reset after 24 hours. The areas are listed in `DECOR_AREAS` in `public/world.js`.
+
 ## Change the town
 
 - `public/world.js`: the floor plan. Team areas, lounge, bar, kitchen, lunch area, meeting room, chairs, rides and how far voices carry.
