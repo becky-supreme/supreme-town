@@ -195,6 +195,9 @@ const DECOR_FILE = path.join(DATA, 'area-decor.json');
 const DECOR_HOURS = 24;
 let areaDecor = {};
 try { areaDecor = JSON.parse(fs.readFileSync(DECOR_FILE, 'utf8')); } catch { /* none yet */ }
+// What everyone is sent: the decoration, without who made it (that stays on the server).
+const publicDecor = (d) => { if (!d) return null; const { by, ...rest } = d; return rest; };
+const publicDecorAll = () => Object.fromEntries(Object.entries(areaDecor).map(([k, d]) => [k, publicDecor(d)]));
 function saveAreaDecor() { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(DECOR_FILE, JSON.stringify(areaDecor)); }
 function expireDecor() {
   for (const [id, dec] of Object.entries(areaDecor)) {
@@ -488,7 +491,7 @@ const server = http.createServer(async (req, res) => {
         if (!decor.boxes.length && !decor.sign) return json(res, 200, { error: "The AI didn't return any decorations. Try again." });
         areaDecor[area.id] = { ...decor, by: email || null, at: Date.now() };
         saveAreaDecor();
-        broadcast({ t: 'area', areaId: area.id, decor: areaDecor[area.id] });
+        broadcast({ t: 'area', areaId: area.id, decor: publicDecor(areaDecor[area.id]) });
         return json(res, 200, { ok: true, name: decor.name });
       } catch (err) {
         console.error('area decor error:', err);
@@ -601,7 +604,7 @@ wss.on('connection', (ws, req) => {
         x: sx + 0.5, y: sy + 0.5, f: 'y+', email,
         status: ['available', 'meeting', 'busy'].includes(m.status) ? m.status : 'available', muted: !!m.muted, camOff: !!m.camOff, item: ITEMS.includes(m.item) ? m.item : null, ride: Object.hasOwn(RIDES, m.ride) ? m.ride : null, screen: null, dance: false, ws,
       };
-      ws.send(JSON.stringify({ t: 'init', id: me.id, you: pub(me), players: [...players.values()].map(pub), desks, areaDecor }));
+      ws.send(JSON.stringify({ t: 'init', id: me.id, you: pub(me), players: [...players.values()].map(pub), desks, areaDecor: publicDecorAll() }));
       players.set(me.id, me);
       broadcast({ t: 'join', player: pub(me) }, me.id);
       return;
