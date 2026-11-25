@@ -272,6 +272,11 @@ function moveAllowed(p, x, y) {
   p.moveAt = now;
   const dist = Math.hypot(x - p.x, y - p.y);
   if (dist > p.moveBudget) return false;
+  // Nothing solid anywhere along the way either, so nobody can hop over a wall.
+  for (let n = 1, steps = Math.ceil(dist / 0.2); n < steps; n++) {
+    const sx = p.x + ((x - p.x) * n) / steps, sy = p.y + ((y - p.y) * n) / steps;
+    if (solidTiles.has(`${Math.floor(sx)},${Math.floor(sy)}`)) return false;
+  }
   p.moveBudget -= dist;
   return true;
 }

@@ -621,7 +621,12 @@ function update(dt, now) {
     const dx = ti + 0.5 - me.x, dy = tj + 0.5 - me.y;
     const dist = Math.hypot(dx, dy);
     if (Math.abs(dx) > Math.abs(dy)) me.f = dx > 0 ? 'x+' : 'x-'; else if (dist > 0.001) me.f = dy > 0 ? 'y+' : 'y-';
-    if (dist <= budget) { me.x = ti + 0.5; me.y = tj + 0.5; me.path.shift(); budget -= dist; }
+    if (dist <= budget) {
+      me.x = ti + 0.5; me.y = tj + 0.5; me.path.shift(); budget -= dist;
+      // Report every square we pass through, so the server sees the real route round corners.
+      send({ t: 'move', x: me.x, y: me.y, f: me.f });
+      lastSent = now;
+    }
     else { me.x += (dx / dist) * budget; me.y += (dy / dist) * budget; budget = 0; }
     moved = true;
   }
