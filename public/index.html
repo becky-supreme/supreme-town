@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supreme Town</title>
+<script type="importmap">{ "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }</script>
+<style>
+  :root {
+    --bg: #17142b; --bg2: #241f45; --panel: #221d3d; --line: #3a3363;
+    --text: #f1eefc; --muted: #a59fc7; --accent: #8b5cf6; --danger: #ef4d5a; --ok: #3ecf8e;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: radial-gradient(1200px 700px at 50% 35%, var(--bg2), var(--bg));
+    color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  canvas#gl, canvas#stage { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  canvas#stage { cursor: pointer; }
+  #welcome { position: fixed; inset: 0; z-index: 7; display: none; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; text-align: center; }
+  #welcome.show { display: flex; animation: welcome 4.2s ease forwards; }
+  #welcome small { font-size: clamp(14px, 2vw, 22px); letter-spacing: .4em; text-transform: uppercase; color: #d9d4f5; }
+  #welcome b { font-size: clamp(40px, 9vw, 120px); font-weight: 900; letter-spacing: .04em; color: #fff; text-shadow: 0 0 18px #b79bff, 0 0 60px #8b5cf6, 0 0 120px #ff3df2; }
+  @keyframes welcome { 0% { opacity: 0; transform: scale(.85); } 15% { opacity: 1; transform: scale(1); } 70% { opacity: 1; } 100% { opacity: 0; transform: scale(1.08); } }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+
+  #videos { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; z-index: 5; max-width: 90vw; }
+  .tile { position: relative; width: 132px; height: 99px; border-radius: 10px; overflow: hidden; background: #0e0c1c; border: 2px solid var(--line); flex: none; }
+  .tile video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile.me video { transform: scaleX(-1); }
+  .tile .initial { display: none; position: absolute; inset: 0; margin: auto; width: 46px; height: 46px; border-radius: 50%; align-items: center; justify-content: center; font-weight: 700; font-size: 20px; }
+  .tile.camoff video, .tile.novideo video { visibility: hidden; }
+  .tile.camoff .initial, .tile.novideo .initial { display: flex; }
+  .tile .nm { position: absolute; left: 6px; bottom: 5px; font-size: 11px; background: rgba(0,0,0,.6); padding: 1px 6px; border-radius: 6px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tile.muted .nm::after { content: " · muted"; color: #ff9aa2; }
+
+  #screens { position: fixed; top: 124px; left: 50%; transform: translateX(-50%); z-index: 5; display: flex; gap: 10px; align-items: flex-start; max-width: 96vw; }
+  .screen { position: relative; width: min(46vw, 640px); border-radius: 12px; overflow: hidden; border: 2px solid var(--accent); background: #000; cursor: zoom-in; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+  .screen.big { width: min(94vw, 150vh); cursor: zoom-out; }
+  .screen video { width: 100%; display: block; }
+  .screen .nm { position: absolute; left: 8px; top: 8px; font-size: 12px; background: rgba(0,0,0,.65); padding: 2px 8px; border-radius: 6px; }
+  body.quiet #screens { display: none; }
+  #toolbar button.sharing { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #banner { position: fixed; top: 0; left: 0; right: 0; z-index: 6; background: var(--danger); color: #fff; text-align: center; padding: 8px 12px; font-weight: 600; display: none; }
+  body.quiet #banner { display: block; }
+  body.quiet #videos { display: none; }
+  body.busy #banner { background: #d97706; }
+
+  #hint { position: fixed; bottom: 86px; left: 50%; transform: translateX(-50%); background: rgba(15,12,30,.88); border: 1px solid var(--line); padding: 7px 14px; border-radius: 999px; z-index: 5; display: none; white-space: nowrap; }
+  #hint kbd { background: var(--accent); border-radius: 5px; padding: 1px 7px; font: inherit; font-weight: 700; margin-right: 6px; }
+
+  #chatlog { position: fixed; left: 14px; bottom: 86px; width: min(320px, 44vw); max-height: 30vh; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; gap: 3px; z-index: 4; pointer-events: none; }
+  #chatlog div { background: rgba(15,12,30,.72); padding: 3px 9px; border-radius: 8px; width: fit-content; max-width: 100%; overflow-wrap: anywhere; }
+  #chatlog b { color: #c9b8ff; font-weight: 600; }
+
+  #toolbar { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; background: rgba(28,23,52,.95); border: 1px solid var(--line); padding: 9px; border-radius: 16px; z-index: 5; max-width: calc(100vw - 20px); }
+  #toolbar button { border: 1px solid var(--line); background: #2d2752; border-radius: 10px; padding: 9px 13px; white-space: nowrap; }
+  #toolbar button:hover { background: #383066; }
+  #toolbar button.off { background: #4a2233; border-color: #7a3346; color: #ffb3ba; }
+  #toolbar button:disabled { opacity: .45; cursor: default; }
+  #status { display: flex; }
+  #status button { border-radius: 0; margin-left: -1px; font-weight: 600; }
+  #status button:first-child { border-radius: 10px 0 0 10px; margin-left: 0; }
+  #status button:last-child { border-radius: 0 10px 10px 0; }
+  #status button.on[data-status=available] { background: #1f9d63; border-color: #1f9d63; color: #fff; }
+  #status button.on[data-status=meeting] { background: var(--danger); border-color: var(--danger); color: #fff; }
+  #status button.on[data-status=busy] { background: #d97706; border-color: #d97706; color: #fff; }
+  #toolbar button[hidden] { display: none; }
+  #where { position: fixed; top: 12px; left: 14px; z-index: 5; background: rgba(15,12,30,.8); border: 1px solid var(--line); padding: 6px 12px; border-radius: 999px; font-weight: 600; display: none; }
+  body.quiet #where { top: 48px; }
+  .chips button.sel { background: var(--accent); border-color: var(--accent); }
+  #chatInput { width: 220px; min-width: 80px; background: #15122a; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
+  #count { color: var(--muted); padding: 0 6px; white-space: nowrap; }
+
+  #panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(360px, 100vw); background: var(--panel); border-left: 1px solid var(--line); z-index: 8; display: none; flex-direction: column; }
+  #panel.open { display: flex; }
+  #panel header { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  #panel header .dot { width: 14px; height: 14px; border-radius: 50%; flex: none; }
+  #panel header h2 { margin: 0; font-size: 16px; flex: 1; }
+  #panel header small { display: block; color: var(--muted); font-weight: 400; font-size: 12px; }
+  #panel header button { background: none; border: 0; font-size: 22px; line-height: 1; color: var(--muted); padding: 2px 6px; }
+  #panelBody { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { padding: 8px 12px; border-radius: 12px; max-width: 88%; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.assistant { background: #322b5c; align-self: flex-start; }
+  .msg.user { background: var(--accent); align-self: flex-end; }
+  .msg.typing { color: var(--muted); font-style: italic; }
+  #panelFoot { padding: 12px 16px; border-top: 1px solid var(--line); display: flex; gap: 8px; }
+  #panelFoot input { flex: 1; min-width: 0; background: #15122a; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
+  .primary { background: var(--accent); border: 0; border-radius: 10px; padding: 9px 14px; font-weight: 600; }
+  .primary:disabled { opacity: .5; cursor: default; }
+  textarea { width: 100%; min-height: 84px; resize: vertical; background: #15122a; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chips button { background: #2d2752; border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; }
+  .chips button:hover { background: #383066; }
+  .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin-top: 6px; }
+  .status { color: var(--muted); min-height: 1.4em; }
+  .status.err { color: #ff9aa2; }
+  .link { background: none; border: 0; color: var(--muted); text-decoration: underline; padding: 0; align-self: flex-start; }
+
+  #join { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; background: rgba(12,10,24,.55); padding: 16px; }
+  #join [hidden] { display: none !important; }
+  #join form, #signin { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 26px; width: min(520px, 100%); max-height: 96vh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+  #join h1 { margin: 0; font-size: 24px; }
+  #join p { margin: 0; color: var(--muted); }
+  #join input[type=text] { background: #15122a; border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; font-size: 16px; }
+  .ai-look { display: flex; gap: 8px; }
+  .ai-look input { flex: 1; min-width: 0; background: #15122a; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
+  #join .status { margin: 0; font-size: 13px; }
+  .maker { display: flex; gap: 14px; align-items: flex-start; }
+  .maker canvas { flex: none; width: 150px; height: 190px; background: #15122a; border: 1px solid var(--line); border-radius: 12px; }
+  .maker .opts { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  #join .chips button { padding: 3px 10px; font-size: 13px; }
+  .swatches { display: flex; gap: 7px; flex-wrap: wrap; }
+  .swatches button { width: 28px; height: 28px; border-radius: 50%; border: 2px solid transparent; padding: 0; }
+  .swatches button.sel { border-color: #fff; box-shadow: 0 0 0 2px var(--accent); }
+  #lost { position: fixed; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center; background: rgba(12,10,24,.85); flex-direction: column; gap: 14px; font-size: 16px; }
+
+  @media (max-width: 760px) {
+    #chatInput { width: 90px; }
+    #toolbar { flex-wrap: wrap; justify-content: center; }
+    #count { display: none; }
+    .tile { width: 96px; height: 72px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="stage"></canvas>
+<div id="welcome"><small>You're now in</small><b>SUPREME TOWN</b></div>
+<div id="banner"></div>
+<div id="where"></div>
+<div id="videos"></div>
+<div id="screens"></div>
+<div id="chatlog"></div>
+<div id="hint"></div>
+
+<div id="toolbar">
+  <button id="btnMic" title="Turn your microphone on or off">Mic on</button>
+  <button id="btnCam" title="Turn your camera on or off">Camera on</button>
+  <button id="btnLook" title="Change your character">Change look</button>
+  <button id="btnScreen" title="Show your screen to the people you're talking to">Share screen</button>
+  <div id="status" role="group" aria-label="Your status">
+    <button data-status="available" title="You can talk to people nearby">Available</button>
+    <button data-status="meeting" title="On a call somewhere else? This mutes you and silences the office.">In a meeting</button>
+    <button data-status="busy" title="Do not disturb: nobody can start talking to you">Busy</button>
+  </div>
+  <button id="btnRide" hidden>Hop off</button>
+  <button id="btnItem" hidden>Finish</button>
+  <input id="chatInput" placeholder="Say something… (Enter)" maxlength="300" autocomplete="off">
+  <span id="count"></span>
+</div>
+
+<aside id="panel">
+  <header>
+    <span class="dot" id="panelDot"></span>
+    <h2 id="panelTitle"></h2>
+    <button id="panelClose" aria-label="Close">×</button>
+  </header>
+  <div id="panelBody"></div>
+  <div id="panelFoot"></div>
+</aside>
+
+<div id="join">
+  <div id="signin" hidden>
+    <h1>Supreme Town</h1>
+    <p id="signinText">Sign in with your Supreme Google account to come in.</p>
+    <div id="gbtn"></div>
+    <p class="status err" id="signinErr"></p>
+  </div>
+  <form id="joinForm" hidden>
+    <h1>Supreme Town</h1>
+    <p id="joinText">Walk around, talk to whoever is nearby, sit anywhere, grab a drink, hop in a go-kart.</p>
+    <input type="text" id="joinName" placeholder="Your name" maxlength="24" required autocomplete="off">
+    <div class="maker">
+      <canvas id="lookPreview" width="150" height="190" aria-label="Preview of your character"></canvas>
+      <div class="opts">
+        <div class="label">Outfit</div><div class="chips" id="swOutfit"></div>
+        <div class="label">Hairstyle</div><div class="chips" id="swHairStyle"></div>
+      </div>
+    </div>
+    <div class="ai-look">
+      <input type="text" id="lookPrompt" placeholder="Or describe yourself: make me look like a mouse" maxlength="200" autocomplete="off">
+      <button type="button" class="primary" id="lookGo">Create with AI</button>
+    </div>
+    <p class="status" id="lookStatus"></p>
+    <div class="label">Main colour</div><div class="swatches" id="swShirt"></div>
+    <div class="label">Hair colour</div><div class="swatches" id="swHair"></div>
+    <div class="label">Skin</div><div class="swatches" id="swSkin"></div>
+    <button class="primary" type="submit" id="joinGo" style="margin-top:8px;padding:12px">Enter Supreme Town</button>
+    <button type="button" class="link" id="signout" hidden>Sign out</button>
+    <p style="font-size:12px">Your browser will ask for your microphone and camera. You can say no and still walk around and chat.</p>
+  </form>
+</div>
+<div id="lost"><div>Lost the connection to Supreme Town.</div><button class="primary" onclick="location.reload()">Reconnect</button></div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supreme Town character sheet</title>
+<style>
+  :root { --bg: #17142b; --panel: #221d3d; --line: #3a3363; --text: #f1eefc; --muted: #a59fc7; --accent: #8b5cf6; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 28px 16px 80px; }
+  main { max-width: 1500px; margin: 0 auto; }
+  h1 { font-size: 30px; margin: 0 0 4px; }
+  h2 { font-size: 21px; margin: 44px 0 4px; padding-top: 18px; border-top: 1px solid var(--line); }
+  p { color: var(--muted); margin: 0 0 14px; max-width: 70ch; }
+  a { color: #c9b8ff; }
+  .grid { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+  figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px; max-width: 100%; overflow-x: auto; }
+  canvas { display: block; max-width: none; }
+  #overview figure { width: 100%; }
+  figcaption { margin-top: 8px; }
+  figcaption b { display: block; }
+  figcaption span { color: var(--muted); font-size: 13px; }
+  .swatches { display: flex; gap: 6px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+  .swatches b { width: 52px; font-weight: 600; color: var(--muted); font-size: 13px; }
+  .swatches span { width: 26px; height: 26px; border-radius: 50%; border: 1px solid rgba(255,255,255,.25); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Supreme Town character sheet</h1>
+  <p>Every desk design, outfit, hairstyle and receptionist, shown as flat drawings. The town itself is 3D, so judge the rooms by walking around it. <a href="/">Back to Supreme Town</a></p>
+
+  <h2>1. Desk designs</h2>
+  <p>The bank of six that anyone can pick at any desk. With an AI key, people can also describe their own.</p>
+  <div class="grid" id="desks"></div>
+
+  <h2>2. Characters</h2>
+  <p>People choose a name, an outfit, a hairstyle and three colours. The outfit bank:</p>
+  <div class="grid" id="outfits"></div>
+  <p style="margin-top:18px">The same outfits from the side and from behind:</p>
+  <div class="grid" id="outfitsSide"></div>
+  <p style="margin-top:18px">Hairstyles (costumes that cover the head hide the hair):</p>
+  <div class="grid" id="hair"></div>
+  <p style="margin-top:18px">Colours, and how people look carrying things, riding and when unavailable:</p>
+  <div class="swatches" id="pShirt"><b>Main</b></div>
+  <div class="swatches" id="pHair"><b>Hair</b></div>
+  <div class="swatches" id="pSkin"><b>Skin</b></div>
+  <div class="grid" id="people" style="margin-top:14px"></div>
+
+  <h2>3. Receptionists</h2>
+  <p>One robot per team, in the team's colour, plus Penny at the entrance.</p>
+  <div class="grid" id="robots"></div>
+</main>
+<script type="module" src="designs.js"></script>
+</body>
+</html>

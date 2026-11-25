@@ -1,0 +1,21 @@
+{
+  "name": "supreme-hq",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Supreme Town: Supreme Optimization's 3D virtual office.",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "check": "node scripts/check-map.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.14.0",
+    "google-auth-library": "^11.3.4",
+    "three": "^0.187.0",
+    "ws": "^8.23.0",
+    "zod": "^4.6.7"
+  },
+  "engines": {
+    "node": ">=20.6"
+  }
+}

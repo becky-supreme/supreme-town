@@ -1,0 +1,29 @@
+# Supreme HQ settings. Copy this file to ".env", then paste each secret after
+# the = sign, with no spaces or quotes. Restart the server after changing it.
+# Never share or commit the .env file.
+
+# Notion: the secret from your "Developer connection" (starts with ntn_ or secret_)
+NOTION_TOKEN=
+
+# AI: powers the bots and the "describe your own desk" designer.
+# Use ONE of these two keys. If both are set, OpenRouter is used.
+OPENROUTER_API_KEY=
+ANTHROPIC_API_KEY=
+
+# Optional, OpenRouter only: which model answers. Default is anthropic/claude-opus-5.5.
+# For Grok: x-ai/grok-4.7
+# OPENROUTER_MODEL=anthropic/claude-opus-5.5
+
+# Sign in with Google: the OAuth client ID (ends in .apps.googleusercontent.com).
+# Leave empty to run without logins on your own computer.
+GOOGLE_CLIENT_ID=
+
+# Only emails at this domain can sign in
+ALLOWED_EMAIL_DOMAIN=supremeopti.com
+
+# Keeps people signed in across restarts. Any long random string.
+SESSION_SECRET=
+
+# Where desks, characters and Notion copies are saved. On Railway, point this
+# at a volume (for example /data) so they survive redeploys.
+# DATA_DIR=/data
