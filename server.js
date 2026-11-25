@@ -9,7 +9,7 @@ import { WebSocketServer } from 'ws';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { DESKS, SPAWNS, W, H, ITEMS, RIDES } from './public/world.js';
+import { DESKS, SPAWNS, W, H, ITEMS, RIDES, staticObjects, zoneOf, isShared, hearRadius } from './public/world.js';
 import { PRESETS, BANK, presetFromPrompt, sanitiseDesign } from './public/presets.js';
 import { cleanLook, avatarBoxes, sanitiseCharacter } from './public/avatar.js';
 import { hasNotion, readBotSources, friendlyNotionError } from './notion.js';
@@ -252,6 +252,46 @@ function saveDesks() {
 // ---------- people ----------
 const players = new Map(); // id -> { id, name, look, x, y, f, status, muted, camOff, item, ride, ws }
 const STATUSES = ['available', 'meeting', 'busy'];
+// ---- keeping conversations private ----
+// Who can hear whom depends on where people are, so the server keeps its own
+// check on both: you can't walk through furniture or glass, you can't jump
+// across the map, and call set-up is only passed between two people who can
+// hear each other. Without this, a tampered browser could listen in on a room
+// it isn't in.
+const solidTiles = new Set();
+function rebuildSolid() {
+  solidTiles.clear();
+  const things = [...staticObjects(), ...DESKS, ...readBotConfig().map((b) => ({ x: b.x, y: b.y, w: 1, d: 1 }))];
+  for (const o of things) for (let i = 0; i < o.w; i++) for (let j = 0; j < o.d; j++) solidTiles.add(`${o.x + i},${o.y + j}`);
+}
+const MAX_SPEED = 14; // squares a second: a little over a go-kart
+function moveAllowed(p, x, y) {
+  if (!(x >= 0 && x < W && y >= 0 && y < H) || solidTiles.has(`${Math.floor(x)},${Math.floor(y)}`)) return false;
+  const now = Date.now();
+  p.moveBudget = Math.min(4, (p.moveBudget ?? 4) + ((now - (p.moveAt || now)) / 1000) * MAX_SPEED);
+  p.moveAt = now;
+  const dist = Math.hypot(x - p.x, y - p.y);
+  if (dist > p.moveBudget) return false;
+  p.moveBudget -= dist;
+  return true;
+}
+function canHear(a, b) {
+  if (a.status !== 'available' || b.status !== 'available') return false;
+  const za = zoneOf(a.x, a.y), zb = zoneOf(b.x, b.y);
+  if (isShared(za) || isShared(zb)) return za === zb;
+  return Math.hypot(a.x - b.x, a.y - b.y) <= Math.min(hearRadius(za), hearRadius(zb)) + 2.5;
+}
+// Only the expected parts of a call set-up message are passed on.
+function cleanSignal(d) {
+  if (!d || typeof d !== 'object') return null;
+  if (d.bye === true) return { bye: true };
+  if (d.sdp && (d.sdp.type === 'offer' || d.sdp.type === 'answer') && typeof d.sdp.sdp === 'string' && d.sdp.sdp.length < 60000) return { sdp: { type: d.sdp.type, sdp: d.sdp.sdp } };
+  if (d.ice && typeof d.ice.candidate === 'string' && d.ice.candidate.length < 2000) {
+    return { ice: { candidate: d.ice.candidate, sdpMid: d.ice.sdpMid == null ? null : String(d.ice.sdpMid).slice(0, 40), sdpMLineIndex: Number.isInteger(d.ice.sdpMLineIndex) ? d.ice.sdpMLineIndex : null, usernameFragment: d.ice.usernameFragment == null ? null : String(d.ice.usernameFragment).slice(0, 80) } };
+  }
+  return null;
+}
+
 // Arcade cabinets: who is playing at each one (up to two people, host first).
 const cabinets = new Map();
 function tellCabinet(cab) {
@@ -446,7 +486,7 @@ wss.on('connection', (ws, req) => {
     if (!me) return;
     if (m.t === 'move') {
       const x = +m.x, y = +m.y;
-      if (!(x >= 0 && x <= W && y >= 0 && y <= H)) return;
+      if (!moveAllowed(me, x, y)) return ws.send(JSON.stringify({ t: 'pos', x: me.x, y: me.y })); // put them back where we have them
       me.x = x; me.y = y; me.f = ['x+', 'x-', 'y+', 'y-'].includes(m.f) ? m.f : me.f;
       broadcast({ t: 'move', id: me.id, x, y, f: me.f }, me.id);
     } else if (m.t === 'look') {
@@ -483,7 +523,10 @@ wss.on('connection', (ws, req) => {
       }
     } else if (m.t === 'signal') {
       const to = players.get(m.to);
-      if (to && to.ws.readyState === 1) to.ws.send(JSON.stringify({ t: 'signal', from: me.id, data: m.data }));
+      const data = cleanSignal(m.data);
+      if (!to || to.ws.readyState !== 1 || !data) return;
+      if (!data.bye && !canHear(me, to)) return; // hanging up is always allowed; calling needs earshot
+      to.ws.send(JSON.stringify({ t: 'signal', from: me.id, data }));
     }
   });
   ws.on('close', () => {
@@ -494,6 +537,7 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+rebuildSolid();
 server.listen(PORT, () => {
   console.log(`Supreme Town is open at http://localhost:${PORT}`);
   console.log(useOpenRouter() ? `AI features on through OpenRouter (${OPENROUTER_MODEL}).` : hasAI() ? `AI features on (${MODEL}).` : 'No AI key found: desks use the six designs and the bots are asleep. See README.md.');

@@ -65,10 +65,14 @@ export function createRTC({ send, container, screens }) {
     peer.screenEl?.remove();
   }
 
-  async function handleSignal(from, data, inMeeting) {
+  async function handleSignal(from, data, me, players) {
     if (data.bye) return drop(from);
     if (data.sdp?.type === 'offer') {
-      if (inMeeting) return send(from, { bye: true });
+      // Answering a call shares our mic and camera, so be strict about who may call:
+      // only the agreed caller of the pair (the smaller id), only when neither of us
+      // is unavailable, and only when they can really hear us from where they stand.
+      const other = players.get(from);
+      if (!me || me.meeting || !other || other.meeting || !(from < me.id) || !inRange(me, other, 0.8)) return send(from, { bye: true });
       const peer = open(from, false);
       await peer.pc.setRemoteDescription(data.sdp);
       peer.ready = true;
@@ -104,10 +108,11 @@ export function createRTC({ send, container, screens }) {
     if (r.d >= r.radius + 0.8) return 0;
     return Math.max(0.08, Math.min(1, 1 - (r.d - r.radius * 0.35) / (r.radius * 0.9)));
   }
-  function inRange(me, other, already) {
+  // slack: extra squares of leeway, so calls don't flicker at the edge of earshot
+  function inRange(me, other, slack = 0) {
     const r = reach(me, other);
     if (r.shared) return r.same;
-    return r.d <= r.radius + (already ? 0.8 : 0); // a little slack so calls don't flicker
+    return r.d <= r.radius + slack;
   }
 
   function showScreen(peer, other, stream) {
@@ -141,9 +146,12 @@ export function createRTC({ send, container, screens }) {
       if (other.id === me.id) continue;
       const has = peers.has(other.id);
       if (me.id < other.id) {
-        const want = !other.meeting && inRange(me, other, has);
+        const want = !other.meeting && inRange(me, other, has ? 0.8 : 0);
         if (want && !has) open(other.id, true);
         else if (!want && has) { send(other.id, { bye: true }); drop(other.id); }
+      } else if (has && !inRange(me, other, 2)) {
+        // The other person normally ends the call; hang up ourselves if they don't.
+        send(other.id, { bye: true }); drop(other.id);
       }
       const peer = peers.get(other.id);
       if (!peer) continue;

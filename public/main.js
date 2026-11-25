@@ -130,6 +130,9 @@ function connect(profile) {
     } else if (m.t === 'move') {
       const p = players.get(m.id);
       if (p) { p.tx = m.x; p.ty = m.y; p.f = m.f; }
+    } else if (m.t === 'pos') {
+      // the server didn't accept where we said we were: go back to where it has us
+      if (me) { me.x = m.x; me.y = m.y; me.path = []; }
     } else if (m.t === 'look') {
       const p = players.get(m.id);
       if (p) { p.look = m.look; p.name = m.name; }
@@ -143,7 +146,7 @@ function connect(profile) {
     } else if (m.t === 'arcade') {
       arcade.handle(m);
     } else if (m.t === 'signal') {
-      rtc.handleSignal(m.from, m.data, me?.meeting).catch((err) => console.warn('call set-up failed', err));
+      rtc.handleSignal(m.from, m.data, me, players).catch((err) => console.warn('call set-up failed', err));
     } else if (m.t === 'desk') {
       desks[m.deskId] = m.desk;
       rebuildObjects();
