@@ -116,6 +116,7 @@
   .swatches { display: flex; gap: 7px; flex-wrap: wrap; }
   .swatches button { width: 28px; height: 28px; border-radius: 50%; border: 2px solid transparent; padding: 0; }
   .swatches button.sel { border-color: #fff; box-shadow: 0 0 0 2px var(--accent); }
+  #reconnecting { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 25; display: none; background: rgba(15,12,30,.9); border: 1px solid var(--line); padding: 7px 16px; border-radius: 999px; font-weight: 600; }
   #lost { position: fixed; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center; background: rgba(12,10,24,.85); flex-direction: column; gap: 14px; font-size: 16px; }
 
   @media (max-width: 760px) {
@@ -195,6 +196,7 @@
     <p style="font-size:12px">Your browser will ask for your microphone and camera. You can say no and still walk around and chat.</p>
   </form>
 </div>
+<div id="reconnecting">Reconnecting to Supreme Town…</div>
 <div id="lost"><div>Lost the connection to Supreme Town.</div><button class="primary" onclick="location.reload()">Reconnect</button></div>
 
 <script type="module" src="main.js"></script>

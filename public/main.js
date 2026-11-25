@@ -101,20 +101,41 @@ const rtc = createRTC({ send: (to, data) => send({ t: 'signal', to, data }), con
 const arcade = createArcade({ send, myId: () => me?.id });
 window.__hq = { players, rtc, scene, arcade, get me() { return me; } }; // handy for debugging in the console
 
+// If the connection drops (for example while a new version of the town goes live),
+// quietly reconnect and carry on from the same spot, with the same status.
+let reconnectTries = 0;
 function connect(profile) {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`);
-  ws.onopen = () => send({ t: 'join', ...profile });
-  ws.onclose = () => { if (me) $('lost').style.display = 'flex'; };
+  ws.onopen = () => {
+    const where = me ? { status: me.status, muted: me.muted, camOff: me.camOff, item: me.item, ride: me.ride } : {};
+    send({ t: 'join', ...profile, ...(me ? { name: me.name, look: me.look } : {}), ...where });
+  };
+  ws.onclose = (e) => {
+    if (!me) return;
+    if (e.code === 4401 || reconnectTries >= 30) { $('lost').style.display = 'flex'; return; } // signed out, or the server is really gone
+    reconnectTries++;
+    $('reconnecting').style.display = 'block';
+    rtc.closeAll();
+    setTimeout(() => connect(profile), Math.min(5000, 1000 + reconnectTries * 500));
+  };
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
     if (m.t === 'init') {
+      const back = !!me; // reconnecting rather than arriving
+      reconnectTries = 0;
+      $('reconnecting').style.display = 'none';
       desks = m.desks;
+      players.clear();
       for (const p of m.players) players.set(p.id, norm({ ...p, tx: p.x, ty: p.y, step: 0 }));
       me = norm({ ...m.you, path: [], step: 0 });
       players.set(me.id, me);
-      cam.x = me.x; cam.y = me.y;
-      introStart = performance.now();
-      $('welcome').classList.add('show');
+      if (!back) {
+        cam.x = me.x; cam.y = me.y;
+        introStart = performance.now();
+        $('welcome').classList.add('show');
+      } else {
+        loadConfig(); // a new version may have new receptionists or settings
+      }
       rebuildObjects();
       updateCount();
     } else if (m.t === 'join') {

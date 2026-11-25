@@ -63,7 +63,9 @@ One Notion key covers the whole office; each bot is pointed at its own page or b
    A bot can have several links. A board (database) is read card by card, with each card's properties and page content; a plain page is read as it is.
 5. Restart the server.
 
-Bots re-read Notion every 10 minutes (change with `NOTION_SYNC_MINUTES` in `.env`), so editing a board updates the bot without touching the office. If Notion is unreachable, a bot keeps what it read last time. Each board is capped at 200 cards.
+From each link, a bot follows everything the page points to: pages and boards inside it, links to other pages, and @-mentions of pages. Linked pages kept elsewhere in Notion are read too, as long as they are shared with the Notion connection (sharing a top-level page covers everything under it). When a bot is asked something, it gets a contents list of every page plus the full text of the pages most relevant to the question.
+
+Bots re-read Notion every 30 minutes (change with `NOTION_SYNC_MINUTES` in `.env`), and only download pages that changed. If Notion is unreachable, a bot keeps what it read last time. Limits: 600 pages per bot, 200 cards per board.
 
 ## Add things to the map
 
