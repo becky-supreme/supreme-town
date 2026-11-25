@@ -345,7 +345,7 @@ async function startSignIn() {
       callback: async ({ credential }) => {
         const r = await fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ credential }) });
         const data = await r.json();
-        if (data.user) showCharacter(data.user); else $('signinErr').textContent = data.error || 'Sign-in failed.';
+        if (data.user) { showCharacter(data.user); loadConfig(); } else $('signinErr').textContent = data.error || 'Sign-in failed.';
       },
     });
     google.accounts.id.renderButton($('gbtn'), { theme: 'filled_blue', size: 'large', text: 'signin_with', shape: 'pill' });
@@ -362,7 +362,7 @@ $('lookGo').onclick = async () => {
   status.className = 'status';
   if (!prompt) { status.textContent = 'Describe how you want to look first.'; return; }
   $('lookGo').disabled = true;
-  status.textContent = 'Designing your character… this takes a few seconds.';
+  status.textContent = 'Designing your character… this can take a few seconds or a couple of minutes, so hang tight.';
   try {
     const r = await fetch('/api/look', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt }) });
     const data = await r.json();
@@ -399,6 +399,7 @@ $('joinForm').onsubmit = async (e) => {
     applyMedia();
     return;
   }
+  loadConfig();
   connect({ name, look });
   const wait = setInterval(() => { if (me) { clearInterval(wait); applyMedia(); } }, 50);
   // Don't hold people at the door while the browser asks about the mic and camera.
@@ -410,7 +411,15 @@ $('joinForm').onsubmit = async (e) => {
   rtc.closeAll(); // calls already under way restart with our mic and camera
   if (me) applyMedia();
 };
-fetch('/api/config').then((r) => r.json()).then((cfg) => { bots = cfg.bots; aiOn = cfg.ai; rebuildObjects(); });
+// The receptionists and AI switches. With sign-in on, the server only answers once you
+// are signed in, so this is asked again after signing in and again on joining.
+function loadConfig() {
+  return fetch('/api/config').then((r) => (r.ok ? r.json() : null)).then((cfg) => {
+    if (!cfg) return;
+    bots = cfg.bots; aiOn = cfg.ai; rebuildObjects();
+  }).catch(() => {});
+}
+loadConfig();
 rebuildObjects();
 
 // ---------- input ----------
@@ -542,7 +551,7 @@ function renderBot(bot, typingNow) {
   if (typingNow) {
     const div = document.createElement('div');
     div.className = 'msg assistant typing';
-    div.textContent = `${bot.name} is thinking…`;
+    div.textContent = `${bot.name} is thinking… this can take a few seconds, or up to a minute for bigger questions.`;
     body.append(div);
   }
   body.scrollTop = body.scrollHeight;
@@ -563,7 +572,8 @@ function renderDeskPanel() {
     <div class="label">Right now</div><div>${esc(d.design.name)}</div>
     ${aiOn ? `<div class="label">Describe the desk you want</div>
     <textarea id="deskPrompt" maxlength="400" placeholder="Make this desk a gothic thing, with candles and a raven"></textarea>
-    <button class="primary" id="deskGo">Design it</button>` : ''}
+    <button class="primary" id="deskGo">Design it</button>
+    <div class="hint-note">AI designs can take anywhere from a few seconds to a couple of minutes.</div>` : ''}
     <div class="status ${panel.err ? 'err' : ''}" id="deskStatus">${esc(panel.status)}</div>
     <div class="label">${aiOn ? 'Or pick a ready-made design' : 'Pick a design'}</div>
     <div class="chips" id="deskChips"></div>`;
@@ -585,7 +595,7 @@ async function submitDesk(payload) {
   const mine = panel;
   if (payload.prompt !== undefined && !payload.prompt.trim()) { mine.status = 'Describe the desk you want first.'; mine.err = true; return renderDeskPanel(); }
   mine.busy = true; mine.err = false;
-  mine.status = payload.preset ? '' : 'Designing the desk… this takes a few seconds.';
+  mine.status = payload.preset ? '' : 'Designing the desk… this can take a few seconds or a couple of minutes, so hang tight.';
   renderDeskPanel();
   try {
     const r = await fetch('/api/desk', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ deskId: mine.deskId, ...payload }) });

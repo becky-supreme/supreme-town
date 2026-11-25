@@ -106,6 +106,7 @@
   #join p { margin: 0; color: var(--muted); }
   #join input[type=text] { background: #15122a; border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; font-size: 16px; }
   .ai-look { display: flex; gap: 8px; }
+  .hint-note { color: var(--muted); font-size: 12px; margin: 0; }
   .ai-look input { flex: 1; min-width: 0; background: #15122a; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
   #join .status { margin: 0; font-size: 13px; }
   .maker { display: flex; gap: 14px; align-items: flex-start; }
@@ -184,6 +185,7 @@
       <input type="text" id="lookPrompt" placeholder="Or describe yourself: make me look like a mouse" maxlength="200" autocomplete="off">
       <button type="button" class="primary" id="lookGo">Create with AI</button>
     </div>
+    <p class="hint-note">AI designs can take anywhere from a few seconds to a couple of minutes.</p>
     <p class="status" id="lookStatus"></p>
     <div class="label">Main colour</div><div class="swatches" id="swShirt"></div>
     <div class="label">Hair colour</div><div class="swatches" id="swHair"></div>
