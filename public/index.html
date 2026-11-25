@@ -72,7 +72,7 @@
   body.quiet #where { top: 48px; }
   .chips button.sel { background: var(--accent); border-color: var(--accent); }
   #chatInput { width: 220px; min-width: 80px; background: #15122a; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
-  #count { color: var(--muted); padding: 0 6px; white-space: nowrap; }
+  #count { white-space: nowrap; }
 
   #panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(360px, 100vw); background: var(--panel); border-left: 1px solid var(--line); z-index: 8; display: none; flex-direction: column; }
   #panel.open { display: flex; }
@@ -85,6 +85,19 @@
   .msg { padding: 8px 12px; border-radius: 12px; max-width: 88%; white-space: pre-wrap; overflow-wrap: anywhere; }
   .msg.assistant { background: #322b5c; align-self: flex-start; }
   .msg.user { background: var(--accent); align-self: flex-end; }
+  .msg a { color: inherit; text-decoration: underline; overflow-wrap: anywhere; }
+  .msg.assistant a { color: #c9b8ff; }
+  #count .badge, .person .badge { background: var(--danger); color: #fff; border-radius: 999px; padding: 0 6px; font-size: 11px; margin-left: 6px; font-weight: 700; }
+  .person { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .person .top { display: flex; align-items: center; gap: 10px; }
+  .person .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .person .who { flex: 1; min-width: 0; }
+  .person .who b { display: block; }
+  .person .who small { color: var(--muted); }
+  .person .acts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .person .acts button { border: 1px solid var(--line); background: #2d2752; border-radius: 8px; padding: 5px 10px; font-size: 13px; }
+  .person .acts button:hover { background: #383066; }
+  .person .acts button.main { background: var(--accent); border-color: var(--accent); color: #fff; }
   .msg.typing { color: var(--muted); font-style: italic; }
   #panelFoot { padding: 12px 16px; border-top: 1px solid var(--line); display: flex; gap: 8px; }
   #panelFoot input { flex: 1; min-width: 0; background: #15122a; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
@@ -134,7 +147,7 @@
   @media (max-width: 760px) {
     #chatInput { width: 90px; }
     #toolbar { flex-wrap: wrap; justify-content: center; }
-    #count { display: none; }
+
     .tile { width: 96px; height: 72px; }
   }
 </style>
@@ -166,7 +179,7 @@
   <button id="btnRide" hidden>Hop off</button>
   <button id="btnItem" hidden>Finish</button>
   <input id="chatInput" placeholder="Say something… (Enter)" maxlength="300" autocomplete="off">
-  <span id="count"></span>
+  <button id="count" title="See who's here and message them"></button>
 </div>
 
 <aside id="panel">
