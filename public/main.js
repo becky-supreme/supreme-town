@@ -303,7 +303,11 @@ function linkify(el, text) {
   while ((m = re.exec(text))) {
     el.append(text.slice(last, m.index));
     const a = document.createElement('a');
-    a.href = m[0]; a.textContent = /notion\.(so|site)/.test(m[0]) ? 'Open in Notion' : m[0];
+    // Only real Notion addresses get the short label; anything else shows the link itself.
+    let host = '';
+    try { host = new URL(m[0]).hostname.toLowerCase(); } catch { /* not a valid address */ }
+    const isNotion = host === 'notion.so' || host === 'www.notion.so' || host.endsWith('.notion.site');
+    a.href = m[0]; a.textContent = isNotion ? 'Open in Notion' : m[0];
     a.target = '_blank'; a.rel = 'noopener noreferrer';
     el.append(a);
     last = m.index + m[0].length;
