@@ -130,6 +130,9 @@ function connect(profile) {
     } else if (m.t === 'move') {
       const p = players.get(m.id);
       if (p) { p.tx = m.x; p.ty = m.y; p.f = m.f; }
+    } else if (m.t === 'pos') {
+      // the server didn't accept where we said we were: go back to where it has us
+      if (me) { me.x = m.x; me.y = m.y; me.path = []; }
     } else if (m.t === 'look') {
       const p = players.get(m.id);
       if (p) { p.look = m.look; p.name = m.name; }
@@ -143,7 +146,7 @@ function connect(profile) {
     } else if (m.t === 'arcade') {
       arcade.handle(m);
     } else if (m.t === 'signal') {
-      rtc.handleSignal(m.from, m.data, me?.meeting).catch((err) => console.warn('call set-up failed', err));
+      rtc.handleSignal(m.from, m.data, me, players).catch((err) => console.warn('call set-up failed', err));
     } else if (m.t === 'desk') {
       desks[m.deskId] = m.desk;
       rebuildObjects();
@@ -618,7 +621,12 @@ function update(dt, now) {
     const dx = ti + 0.5 - me.x, dy = tj + 0.5 - me.y;
     const dist = Math.hypot(dx, dy);
     if (Math.abs(dx) > Math.abs(dy)) me.f = dx > 0 ? 'x+' : 'x-'; else if (dist > 0.001) me.f = dy > 0 ? 'y+' : 'y-';
-    if (dist <= budget) { me.x = ti + 0.5; me.y = tj + 0.5; me.path.shift(); budget -= dist; }
+    if (dist <= budget) {
+      me.x = ti + 0.5; me.y = tj + 0.5; me.path.shift(); budget -= dist;
+      // Report every square we pass through, so the server sees the real route round corners.
+      send({ t: 'move', x: me.x, y: me.y, f: me.f });
+      lastSent = now;
+    }
     else { me.x += (dx / dist) * budget; me.y += (dy / dist) * budget; budget = 0; }
     moved = true;
   }
