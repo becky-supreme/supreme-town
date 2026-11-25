@@ -629,6 +629,20 @@ wss.on('connection', (ws, req) => {
       me.screen = typeof m.screen === 'string' && m.screen ? m.screen.slice(0, 80) : null;
       me.dance = !!m.dance;
       broadcast({ t: 'state', id: me.id, status: me.status, muted: me.muted, camOff: me.camOff, item: me.item, ride: me.ride, screen: me.screen, dance: me.dance }, me.id);
+    } else if (m.t === 'poke') {
+      // Waving at someone, or inviting them over. Everyone sees a wave; only the
+      // person it's for gets told. Nobody can send more than one every 2 seconds,
+      // and people set to In a meeting or Busy aren't disturbed.
+      const to = players.get(m.to);
+      const kind = m.kind === 'invite' ? 'invite' : 'wave';
+      if (!to || to === me) return;
+      const now = Date.now();
+      if (now - (me.lastPoke || 0) < 2000) return;
+      me.lastPoke = now;
+      if (kind === 'wave') broadcast({ t: 'emote', id: me.id, kind: 'wave' });
+      if (to.status !== 'available') return ws.send(JSON.stringify({ t: 'poke-result', to: to.id, kind, ok: false, reason: to.status === 'busy' ? 'busy' : 'meeting' }));
+      if (to.ws.readyState === 1) to.ws.send(JSON.stringify({ t: 'poke', from: me.id, name: me.name, kind }));
+      ws.send(JSON.stringify({ t: 'poke-result', to: to.id, kind, ok: true }));
     } else if (m.t === 'chat') {
       const text = clean(m.text, 300);
       if (text) broadcast({ t: 'chat', id: me.id, name: me.name, text });

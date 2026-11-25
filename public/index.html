@@ -116,6 +116,18 @@
   .swatches { display: flex; gap: 7px; flex-wrap: wrap; }
   .swatches button { width: 28px; height: 28px; border-radius: 50%; border: 2px solid transparent; padding: 0; }
   .swatches button.sel { border-color: #fff; box-shadow: 0 0 0 2px var(--accent); }
+  #personMenu { position: fixed; z-index: 12; background: rgba(28,23,52,.97); border: 1px solid var(--line); border-radius: 12px; padding: 6px; display: flex; flex-direction: column; gap: 4px; min-width: 150px; box-shadow: 0 8px 30px rgba(0,0,0,.4); }
+  #personMenu[hidden] { display: none; }
+  #personMenu .pm-name { font-weight: 700; padding: 4px 8px 6px; border-bottom: 1px solid var(--line); margin-bottom: 2px; }
+  #personMenu button { background: none; border: 0; text-align: left; padding: 7px 10px; border-radius: 8px; }
+  #personMenu button:hover { background: #383066; }
+  #toasts { position: fixed; top: 60px; right: 14px; z-index: 13; display: flex; flex-direction: column; gap: 8px; width: min(300px, calc(100vw - 28px)); }
+  .toast { background: rgba(28,23,52,.97); border: 1px solid var(--accent); border-radius: 12px; padding: 10px 12px; box-shadow: 0 8px 30px rgba(0,0,0,.4); }
+  .toast .acts { display: flex; gap: 8px; margin-top: 8px; }
+  .toast .acts button { border: 1px solid var(--line); background: #2d2752; border-radius: 8px; padding: 6px 12px; }
+  .toast .acts button.go { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #following { position: fixed; top: 56px; left: 14px; z-index: 6; display: none; background: rgba(15,12,30,.9); border: 1px solid var(--accent); padding: 6px 8px 6px 12px; border-radius: 999px; font-weight: 600; align-items: center; gap: 8px; }
+  #following button { background: var(--accent); border: 0; border-radius: 999px; padding: 3px 10px; color: #fff; }
   #reconnecting { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 25; display: none; background: rgba(15,12,30,.9); border: 1px solid var(--line); padding: 7px 16px; border-radius: 999px; font-weight: 600; }
   #lost { position: fixed; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center; background: rgba(12,10,24,.85); flex-direction: column; gap: 14px; font-size: 16px; }
 
@@ -199,6 +211,14 @@
     <p style="font-size:12px">Your browser will ask for your microphone and camera. You can say no and still walk around and chat.</p>
   </form>
 </div>
+<div id="personMenu" role="menu" hidden>
+  <div class="pm-name" id="pmName"></div>
+  <button id="pmWave" role="menuitem">Wave</button>
+  <button id="pmInvite" role="menuitem">Invite over</button>
+  <button id="pmFollow" role="menuitem">Follow</button>
+</div>
+<div id="toasts" aria-live="polite"></div>
+<div id="following"><span id="followingName"></span><button id="followStop">Stop</button></div>
 <div id="reconnecting">Reconnecting to Supreme Town…</div>
 <div id="lost"><div>Lost the connection to Supreme Town.</div><button class="primary" onclick="location.reload()">Reconnect</button></div>
 

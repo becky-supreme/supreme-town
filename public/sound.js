@@ -81,6 +81,8 @@ const SOUNDS = {
   win: () => [523, 659, 784, 1047].forEach((f, i) => tone({ freq: f, type: 'square', dur: 0.18, vol: 0.12, at: i * 0.12 })),
   magic: () => [880, 1175, 1397, 1760, 2093].forEach((f, i) => tone({ freq: f, type: 'sine', dur: 0.4, vol: 0.08, at: i * 0.07 })),
   dance: () => tone({ freq: 392, to: 784, type: 'triangle', dur: 0.2, vol: 0.15 }),
+  wave: () => { tone({ freq: 660, type: 'sine', dur: 0.1, vol: 0.14 }); tone({ freq: 880, type: 'sine', dur: 0.14, vol: 0.12, at: 0.09 }); },
+  invite: () => [523, 659, 784].forEach((f, i) => tone({ freq: f, type: 'triangle', dur: 0.22, vol: 0.13, at: i * 0.09 })),
 };
 export function play(name) { start(); SOUNDS[name]?.(); }
 
