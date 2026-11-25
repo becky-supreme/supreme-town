@@ -216,7 +216,7 @@ export async function readBotSources(sources, previous = {}, { followLinks = fal
   }
   if (capped) notes.push(`Stopped after ${MAX_PAGES} pages.`);
   if (skipped) notes.push(`${skipped} linked page(s) or board(s) couldn't be opened; share them with the Notion connection to include them.`);
-  const sections = order.map((id) => ({ id, title: pages[id].title, text: pages[id].text }));
+  const sections = order.map((id) => ({ id, title: pages[id].title, text: pages[id].text, url: pageUrl(id) }));
   return { sections, pages, items: sections.length, notes, syncedAt: new Date().toISOString() };
 }
 
@@ -224,12 +224,16 @@ export async function readBotSources(sources, previous = {}, { followLinks = fal
 const STOP = new Set('the and for are but not you your with this that from have has had was were what when where which who why how can could should would will about into onto than then them they their there here our out all any each its it’s it\'s i’m im me my mine we us do does did done get got make made need want just also only some more most very like over under again been being off per via a an to of in on at by or as is be if so no up down'.split(' '));
 const words = (s) => String(s).toLowerCase().match(/[a-z0-9][a-z0-9'-]{1,}/g)?.filter((w) => !STOP.has(w)) || [];
 
+// A link that opens the page in Notion for anyone who has access to it.
+export const pageUrl = (id) => `https://www.notion.so/${norm(id)}`;
+const linkOf = (s) => s.url || (s.id ? pageUrl(s.id) : '');
+
 // Picks the pages most likely to answer the question, up to budget characters.
 // Always starts with a contents list of every page, so the bot knows what exists.
 export function pickSections(sections, question, budget = 160_000) {
-  const contents = `Contents of the Notion pages you can read (${sections.length}):\n` + sections.map((s) => `- ${s.title}`).join('\n');
+  const contents = `Contents of the Notion pages you can read (${sections.length}), each with its link:\n` + sections.map((s) => `- ${s.title}${linkOf(s) ? ` (${linkOf(s)})` : ''}`).join('\n');
   const total = sections.reduce((n, s) => n + s.text.length + s.title.length + 4, 0);
-  const asText = (list) => list.map((s) => `# ${s.title}\n${s.text}`).join('\n\n');
+  const asText = (list) => list.map((s) => `# ${s.title}${linkOf(s) ? `\nLink: ${linkOf(s)}` : ''}\n${s.text}`).join('\n\n');
   if (total + contents.length <= budget) return `${contents}\n\n${asText(sections)}`; // it all fits
   const terms = [...new Set(words(question))];
   const scored = sections.map((s, i) => {

@@ -149,6 +149,8 @@ function connect(profile) {
       const p = players.get(m.id);
       if (p) logChat(null, `${p.name} left`);
       players.delete(m.id);
+      dmUnread.delete(m.id);
+      if (panel?.kind === 'dm' && panel.id === m.id) { toast(`${p?.name || 'They'} left town.`); openPeople(); }
       rtc.drop(m.id);
       updateCount();
     } else if (m.t === 'move') {
@@ -163,6 +165,17 @@ function connect(profile) {
     } else if (m.t === 'state') {
       const p = players.get(m.id);
       if (p) norm(Object.assign(p, { status: m.status, muted: m.muted, camOff: m.camOff, item: m.item, ride: m.ride, screen: m.screen, dance: m.dance }));
+    } else if (m.t === 'dm') {
+      const thread = dmThreads.get(m.from) || [];
+      thread.push({ mine: false, text: m.text });
+      dmThreads.set(m.from, thread);
+      if (panel?.kind === 'dm' && panel.id === m.from) renderDm();
+      else {
+        dmUnread.set(m.from, (dmUnread.get(m.from) || 0) + 1);
+        updateCount();
+        if (!me?.meeting) sound.play('chat');
+        toast(`${m.name}: ${m.text.length > 80 ? m.text.slice(0, 80) + '…' : m.text}`, [{ label: 'Reply', go: true, run: () => openDm(m.from) }], 12000);
+      }
     } else if (m.t === 'emote') {
       const p = players.get(m.id);
       if (p) p.emoteUntil = performance.now() + 1800;
@@ -203,7 +216,11 @@ function connect(profile) {
     }
   };
 }
-function updateCount() { $('count').textContent = `${players.size} here`; }
+function updateCount() {
+  const unread = [...dmUnread.values()].reduce((a, b) => a + b, 0);
+  $('count').textContent = `${players.size} here`;
+  if (unread) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = unread; $('count').append(b); }
+}
 function logChat(name, text) {
   const div = document.createElement('div');
   if (name) { const b = document.createElement('b'); b.textContent = `${name}: `; div.append(b); }
@@ -272,6 +289,108 @@ function setDance(on) {
   sendState();
 }
 $('btnDance').onclick = () => setDance(!me?.dance);
+
+// ---------- who's here, and private messages ----------
+const dmThreads = new Map(); // person id -> [{ mine, text }]
+const dmUnread = new Map(); // person id -> count
+$('count').onclick = () => (panel?.kind === 'people' ? closePanel() : openPeople());
+
+// Turns web links in a message into clickable links, safely (only http and https).
+function linkify(el, text) {
+  el.textContent = '';
+  const re = /https?:\/\/[^\s<>()"']+[^\s<>()"'.,;:!?]/g;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    el.append(text.slice(last, m.index));
+    const a = document.createElement('a');
+    a.href = m[0]; a.textContent = /notion\.(so|site)/.test(m[0]) ? 'Open in Notion' : m[0];
+    a.target = '_blank'; a.rel = 'noopener noreferrer';
+    el.append(a);
+    last = m.index + m[0].length;
+  }
+  el.append(text.slice(last));
+}
+
+function openPeople() {
+  panel = { kind: 'people' };
+  openPanel("Who's here", 'Click someone to message, join or follow them', '#3ecf8e');
+  $('panelFoot').innerHTML = '';
+  renderPeople();
+}
+function renderPeople() {
+  if (panel?.kind !== 'people') return;
+  const body = $('panelBody');
+  const others = [...players.values()].filter((p) => p !== me).sort((a, b) => a.name.localeCompare(b.name));
+  const sig = JSON.stringify(others.map((p) => [p.id, p.name, p.status, areaAt(p.tx ?? p.x, p.ty ?? p.y), dmUnread.get(p.id) || 0, me.follow === p.id]));
+  if (panel.sig === sig) return; // nothing changed: don't redraw under the mouse
+  panel.sig = sig;
+  body.innerHTML = '';
+  if (!others.length) { const d = document.createElement('div'); d.className = 'status'; d.textContent = "It's just you here at the moment."; body.append(d); return; }
+  for (const p of others) {
+    const card = document.createElement('div');
+    card.className = 'person';
+    const top = document.createElement('div'); top.className = 'top';
+    const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = STATUS[p.status]?.color || '#888';
+    const who = document.createElement('div'); who.className = 'who';
+    const name = document.createElement('b'); name.textContent = p.name;
+    const unread = dmUnread.get(p.id);
+    if (unread) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = unread; name.append(b); }
+    const where = document.createElement('small');
+    where.textContent = `${STATUS[p.status]?.label || ''} · ${areaAt(p.tx ?? p.x, p.ty ?? p.y)}`;
+    who.append(name, where);
+    top.append(dot, who);
+    const acts = document.createElement('div'); acts.className = 'acts';
+    const btn = (label, run, main) => { const b = document.createElement('button'); b.textContent = label; if (main) b.className = 'main'; b.onclick = run; acts.append(b); };
+    btn('Message', () => openDm(p.id), true);
+    btn('Go to them', () => { closePanel(); if (!walkTo(p)) toast(`Can't find a way to ${p.name} from here.`); });
+    btn(me.follow === p.id ? 'Stop following' : 'Follow', () => { if (me.follow === p.id) stopFollowing(); else { startFollowing(p); closePanel(); } renderPeople(); });
+    btn('Wave', () => { send({ t: 'poke', to: p.id, kind: 'wave' }); me.emoteUntil = performance.now() + 1800; sound.play('wave'); });
+    btn('Invite over', () => send({ t: 'poke', to: p.id, kind: 'invite' }));
+    card.append(top, acts);
+    body.append(card);
+  }
+}
+setInterval(renderPeople, 1000);
+
+function openDm(id) {
+  const p = players.get(id);
+  if (!p) { toast('They have left.'); return; }
+  panel = { kind: 'dm', id };
+  dmUnread.delete(id);
+  updateCount();
+  openPanel(p.name, 'Private message: only the two of you see this', STATUS[p.status]?.color || '#8b5cf6');
+  $('panelFoot').innerHTML = '<button class="link" id="dmBack" style="align-self:center">Everyone</button><input id="dmInput" placeholder="Write a message…" maxlength="500" autocomplete="off"><button class="primary" id="dmSend">Send</button>';
+  $('dmBack').onclick = () => openPeople();
+  const input = $('dmInput');
+  const go = () => {
+    const text = input.value.trim();
+    if (!text || !players.get(id)) return;
+    send({ t: 'dm', to: id, text });
+    const thread = dmThreads.get(id) || [];
+    thread.push({ mine: true, text });
+    dmThreads.set(id, thread);
+    input.value = '';
+    renderDm();
+  };
+  $('dmSend').onclick = go;
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  renderDm();
+  input.focus();
+}
+function renderDm() {
+  if (panel?.kind !== 'dm') return;
+  const body = $('panelBody');
+  body.innerHTML = '';
+  const thread = dmThreads.get(panel.id) || [];
+  if (!thread.length) { const d = document.createElement('div'); d.className = 'status'; d.textContent = 'Say hello. Messages last until one of you leaves town.'; body.append(d); }
+  for (const m of thread) {
+    const div = document.createElement('div');
+    div.className = `msg ${m.mine ? 'user' : 'assistant'}`;
+    linkify(div, m.text);
+    body.append(div);
+  }
+  body.scrollTop = body.scrollHeight;
+}
 
 // ---------- waving, inviting and following ----------
 // Who (other than you) is under the mouse, by how close their figure is on screen.
@@ -756,7 +875,7 @@ function renderBot(bot, typingNow) {
   for (const m of botChats[bot.id]) {
     const div = document.createElement('div');
     div.className = `msg ${m.role}`;
-    div.textContent = m.content;
+    linkify(div, m.content);
     body.append(div);
   }
   if (typingNow) {
