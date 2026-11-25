@@ -1,4 +1,5 @@
-import { W, H, DESKS, zoneOf, isShared, hearRadius, staticObjects, robot, areaAt, RIDES, CHAIRS } from './world.js';
+import { W, H, DESKS, zoneOf, isShared, hearRadius, staticObjects, robot, areaAt, RIDES, CHAIRS, DANCE, onDanceFloor, DECOR_AREAS, decorAreaAt } from './world.js';
+import * as sound from './sound.js';
 import { PRESETS, BANK } from './presets.js';
 import { drawBox } from './iso.js';
 import { createScene } from './scene3d.js';
@@ -98,28 +99,51 @@ function findPath(from, isGoal) {
 // ---------- networking ----------
 function send(msg) { if (ws?.readyState === 1) ws.send(JSON.stringify(msg)); }
 const rtc = createRTC({ send: (to, data) => send({ t: 'signal', to, data }), container: $('videos'), screens: $('screens') });
-const arcade = createArcade({ send, myId: () => me?.id });
-window.__hq = { players, rtc, scene, arcade, get me() { return me; } }; // handy for debugging in the console
+const arcade = createArcade({ send, myId: () => me?.id, sfx: (n) => sound.play(n) });
+window.__hq = { players, rtc, scene, arcade, findPath, get me() { return me; } }; // handy for debugging in the console
 
+// If the connection drops (for example while a new version of the town goes live),
+// quietly reconnect and carry on from the same spot, with the same status.
+let reconnectTries = 0;
 function connect(profile) {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`);
-  ws.onopen = () => send({ t: 'join', ...profile });
-  ws.onclose = () => { if (me) $('lost').style.display = 'flex'; };
+  ws.onopen = () => {
+    const where = me ? { status: me.status, muted: me.muted, camOff: me.camOff, item: me.item, ride: me.ride } : {};
+    send({ t: 'join', ...profile, ...(me ? { name: me.name, look: me.look } : {}), ...where });
+  };
+  ws.onclose = (e) => {
+    if (!me) return;
+    if (e.code === 4401 || reconnectTries >= 30) { $('lost').style.display = 'flex'; return; } // signed out, or the server is really gone
+    reconnectTries++;
+    $('reconnecting').style.display = 'block';
+    rtc.closeAll();
+    setTimeout(() => connect(profile), Math.min(5000, 1000 + reconnectTries * 500));
+  };
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
     if (m.t === 'init') {
+      const back = !!me; // reconnecting rather than arriving
+      reconnectTries = 0;
+      $('reconnecting').style.display = 'none';
       desks = m.desks;
+      for (const a of DECOR_AREAS) scene.setAreaDecor(a, m.areaDecor?.[a.id] || null);
+      players.clear();
       for (const p of m.players) players.set(p.id, norm({ ...p, tx: p.x, ty: p.y, step: 0 }));
       me = norm({ ...m.you, path: [], step: 0 });
       players.set(me.id, me);
-      cam.x = me.x; cam.y = me.y;
-      introStart = performance.now();
-      $('welcome').classList.add('show');
+      if (!back) {
+        cam.x = me.x; cam.y = me.y;
+        introStart = performance.now();
+        $('welcome').classList.add('show');
+      } else {
+        loadConfig(); // a new version may have new receptionists or settings
+      }
       rebuildObjects();
       updateCount();
     } else if (m.t === 'join') {
       players.set(m.player.id, norm({ ...m.player, tx: m.player.x, ty: m.player.y, step: 0 }));
       logChat(null, `${m.player.name} walked in`);
+      sound.play('chime');
       updateCount();
     } else if (m.t === 'leave') {
       const p = players.get(m.id);
@@ -138,15 +162,21 @@ function connect(profile) {
       if (p) { p.look = m.look; p.name = m.name; }
     } else if (m.t === 'state') {
       const p = players.get(m.id);
-      if (p) norm(Object.assign(p, { status: m.status, muted: m.muted, camOff: m.camOff, item: m.item, ride: m.ride, screen: m.screen }));
+      if (p) norm(Object.assign(p, { status: m.status, muted: m.muted, camOff: m.camOff, item: m.item, ride: m.ride, screen: m.screen, dance: m.dance }));
     } else if (m.t === 'chat') {
       const p = players.get(m.id);
       if (p) p.bubble = { text: m.text, until: performance.now() + 6000 };
       logChat(m.name, m.text);
+      sound.play('chat');
     } else if (m.t === 'arcade') {
       arcade.handle(m);
     } else if (m.t === 'signal') {
       rtc.handleSignal(m.from, m.data, me, players).catch((err) => console.warn('call set-up failed', err));
+    } else if (m.t === 'area') {
+      const a = DECOR_AREAS.find((x) => x.id === m.areaId);
+      if (a) scene.setAreaDecor(a, m.decor);
+      if (a && m.decor) { logChat(null, `${a.name} has been decorated: ${m.decor.name}`); sound.play('magic'); }
+      if (panel?.kind === 'decor' && panel.area.id === m.areaId) { panel.current = m.decor; renderDecorPanel(); }
     } else if (m.t === 'desk') {
       desks[m.deskId] = m.desk;
       rebuildObjects();
@@ -206,9 +236,72 @@ function applyMedia() {
   $('btnScreen').classList.toggle('sharing', !!screenStream);
   $('btnRide').hidden = !me.ride;
   $('btnItem').hidden = !me.item;
-  $('btnItem').textContent = me.item === 'coffee' ? 'Finish coffee' : 'Finish lunch';
+  $('btnItem').textContent = { coffee: 'Finish coffee', lunch: 'Finish lunch', beer: 'Finish beer', cocktail: 'Finish cocktail', soda: 'Finish drink' }[me.item] || 'Put it down';
+  $('btnDance').classList.toggle('sharing', !!me.dance);
+  $('btnDance').textContent = me.dance ? 'Stop dancing' : 'Dance';
+  $('btnSound').textContent = sound.isMuted() ? 'Sound off' : 'Sound on';
+  $('btnSound').classList.toggle('off', sound.isMuted());
 }
-function sendState() { send({ t: 'state', status: me.status, muted: me.muted, camOff: me.camOff, item: me.item, ride: me.ride, screen: me.screen || null }); }
+function sendState() { send({ t: 'state', status: me.status, muted: me.muted, camOff: me.camOff, item: me.item, ride: me.ride, screen: me.screen || null, dance: !!me.dance }); }
+
+// ---------- dancing, sound and decorating ----------
+function setDance(on) {
+  if (!me || !!me.dance === on) return;
+  me.dance = on;
+  if (on) { me.path = []; sound.play('dance'); }
+  applyMedia();
+  sendState();
+}
+$('btnDance').onclick = () => setDance(!me?.dance);
+$('btnSound').onclick = () => { sound.setMuted(!sound.isMuted()); if (me) applyMedia(); };
+$('btnDecor').onclick = () => openDecor();
+
+function openDecor() {
+  if (!me) return;
+  const area = decorAreaAt(me.x, me.y);
+  panel = { kind: 'decor', area, status: '', err: false, current: null };
+  openPanel(area ? `Decorate: ${area.name}` : 'Decorate', 'Describe it and the AI dresses the whole area', '#ff3df2');
+  $('panelFoot').innerHTML = '';
+  if (area) fetch('/api/config').then(() => {}); // keeps the session fresh
+  renderDecorPanel();
+}
+function renderDecorPanel() {
+  const body = $('panelBody');
+  const { area } = panel;
+  if (!area) {
+    body.innerHTML = '<div>Walk into a shared space (the lounge, the bar, the lunch area, the kitchen, the meeting room, the entrance or a team area), then press Decorate again.</div>';
+    return;
+  }
+  const draft = $('decorPrompt')?.value ?? '';
+  body.innerHTML = `
+    <div class="label">Describe the decorations</div>
+    <textarea id="decorPrompt" maxlength="300" placeholder="It's Sam's birthday: balloons, bunting and a big HAPPY BIRTHDAY SAM sign"></textarea>
+    <button class="primary" id="decorGo">Decorate it</button>
+    <div class="hint-note">AI designs can take anywhere from a few seconds to a couple of minutes. Everyone sees the result, and the area goes back to normal by itself after a day.</div>
+    <div class="status ${panel.err ? 'err' : ''}" id="decorStatus"></div>
+    <button class="link" id="decorReset">Put this area back to normal now</button>`;
+  $('decorStatus').textContent = panel.status;
+  $('decorPrompt').value = draft;
+  $('decorGo').disabled = !!panel.busy;
+  $('decorGo').onclick = () => submitDecor({ prompt: $('decorPrompt').value });
+  $('decorReset').onclick = () => submitDecor({ reset: true });
+}
+async function submitDecor(payload) {
+  if (panel?.kind !== 'decor' || panel.busy || !panel.area) return;
+  const mine = panel;
+  if (payload.prompt !== undefined && !payload.prompt.trim()) { mine.status = 'Describe the decorations first.'; mine.err = true; return renderDecorPanel(); }
+  mine.busy = true; mine.err = false;
+  mine.status = payload.reset ? 'Tidying up…' : 'Decorating… this can take a few seconds or a couple of minutes, so hang tight.';
+  renderDecorPanel();
+  try {
+    const r = await fetch('/api/area', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ areaId: mine.area.id, ...payload }) });
+    const data = await r.json();
+    mine.err = !!data.error;
+    mine.status = data.error || (payload.reset ? 'Back to normal.' : `Done: ${data.name}.`);
+  } catch { mine.err = true; mine.status = "Couldn't reach the server."; }
+  mine.busy = false;
+  if (panel === mine) renderDecorPanel();
+}
 
 // Screen sharing: everyone you are currently talking to sees it. Calls restart
 // for a moment so the screen can be added to (or taken out of) them.
@@ -240,7 +333,7 @@ $('btnScreen').onclick = () => (screenStream ? stopShare() : startShare());
 
 $('btnMic').onclick = () => { me.muted = !me.muted; applyMedia(); sendState(); };
 $('btnCam').onclick = () => { me.camOff = !me.camOff; applyMedia(); sendState(); };
-$('btnRide').onclick = () => { me.ride = null; applyMedia(); sendState(); };
+$('btnRide').onclick = () => { me.ride = null; sound.play('hopOff'); applyMedia(); sendState(); };
 $('btnItem').onclick = () => { me.item = null; applyMedia(); sendState(); };
 async function setStatus(status) {
   if (!me || me.status === status) return;
@@ -387,6 +480,7 @@ $('btnLook').onclick = () => {
 
 $('joinForm').onsubmit = async (e) => {
   e.preventDefault();
+  sound.start();
   const name = $('joinName').value.trim();
   if (!name) return;
   store('hq.name', name);
@@ -430,6 +524,7 @@ addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { $('chatInput').focus(); e.preventDefault(); return; }
   if (e.key === 'e' || e.key === 'E') { if (near) interact(near); return; }
   if ((e.key === 'x' || e.key === 'X') && me.ride) { $('btnRide').click(); return; }
+  if (e.key === 'v' || e.key === 'V') { setDance(!me.dance); return; }
   if (e.key === 'g' || e.key === 'G') { showSquares = !showSquares; lastArea = ''; return; }
   keys.add(e.key.toLowerCase());
 });
@@ -480,9 +575,9 @@ function interact(o) {
   pending = null;
   if (o.kind === 'bot') return openBot(o.bot);
   if (o.kind === 'desk') return openDesk(o.id);
-  if (o.kind === 'arcade') return arcade.open(o.id);
-  if (o.kind === 'pickup') { me.item = o.item; me.itemUntil = Date.now() + 10 * 60000; }
-  if (o.kind === 'vehicle') { me.ride = o.ride; closePanel(); }
+  if (o.kind === 'arcade') { sound.play('blip'); return arcade.open(o.id); }
+  if (o.kind === 'pickup') { me.item = o.item; me.itemUntil = Date.now() + 10 * 60000; sound.play(['beer', 'cocktail', 'soda'].includes(o.item) ? 'drink' : 'pickup'); }
+  if (o.kind === 'vehicle') { me.ride = o.ride; me.dance = false; closePanel(); sound.play('hop'); if (o.ride === 'kart') sound.play('engine'); }
   applyMedia();
   sendState();
 }
@@ -640,6 +735,18 @@ function update(dt, now) {
     else { me.x += (dx / dist) * budget; me.y += (dy / dist) * budget; budget = 0; }
     moved = true;
   }
+  if (moved && me.dance) setDance(false); // walking off stops the dancing
+  // footsteps (not on rides), about two a second
+  if (moved && !me.ride) { me.stepClock = (me.stepClock || 0) + dt; if (me.stepClock > 0.32) { me.stepClock = 0; sound.play('step'); } }
+  const sittingNow = !moved && !me.ride && !!chairAt.get(`${Math.floor(me.x)},${Math.floor(me.y)}`);
+  if (sittingNow && !me.wasSitting) sound.play('sit');
+  me.wasSitting = sittingNow;
+  // the dance floor music: loud in the middle, fading out over a few squares, off when unavailable
+  {
+    const cx = (DANCE.x0 + DANCE.x1 + 1) / 2, cy = (DANCE.y0 + DANCE.y1 + 1) / 2;
+    const d = Math.hypot(me.x - cx, me.y - cy);
+    sound.setMusicLevel(me.meeting ? 0 : Math.max(0, Math.min(1, 1.25 - d / 9)));
+  }
   me.step = moved ? me.step + dt * 14 : 0;
   if ((moved && now - lastSent > 70) || (!moved && me.dirty)) {
     send({ t: 'move', x: me.x, y: me.y, f: me.f });
@@ -670,6 +777,7 @@ function update(dt, now) {
   const hint = $('hint');
   if (near && !panel && !me.path.length) { hint.innerHTML = hintFor(near) + (me.ride ? ' &nbsp;·&nbsp; <kbd>X</kbd>Hop off' : ''); hint.style.display = 'block'; }
   else if (me.ride && !panel) { hint.innerHTML = `<kbd>X</kbd>Hop off the ${RIDES[me.ride].name}`; hint.style.display = 'block'; }
+  else if (onDanceFloor(me.x, me.y) && !panel && !me.dance && !me.path.length) { hint.innerHTML = '<kbd>V</kbd>Dance'; hint.style.display = 'block'; }
   else hint.style.display = 'none';
   const area = showSquares ? (hover && hover[0] >= 0 ? `Square ${hover[0]}, ${hover[1]}` : 'Point at the floor') : areaAt(me.x, me.y) + (isShared(zoneOf(me.x, me.y)) ? ' · everyone here can hear you' : '');
   if (area !== lastArea) { lastArea = area; $('where').textContent = area; $('where').style.display = 'block'; }

@@ -63,7 +63,9 @@ One Notion key covers the whole office; each bot is pointed at its own page or b
    A bot can have several links. A board (database) is read card by card, with each card's properties and page content; a plain page is read as it is.
 5. Restart the server.
 
-Bots re-read Notion every 10 minutes (change with `NOTION_SYNC_MINUTES` in `.env`), so editing a board updates the bot without touching the office. If Notion is unreachable, a bot keeps what it read last time. Each board is capped at 200 cards.
+From each link, a bot reads the pages and boards inside it. Add `"followLinks": true` to a bot to also follow links and @-mentions to pages kept elsewhere in Notion (Amy has this on). Only do that for bots whose links point at material everyone signed in may see, because the bot can repeat anything it reads; it can only ever reach pages shared with the Notion connection. When a bot is asked something, it gets a contents list of every page plus the full text of the pages most relevant to the question.
+
+Bots re-read Notion every 30 minutes (change with `NOTION_SYNC_MINUTES` in `.env`), and only download pages that changed. If Notion is unreachable, a bot keeps what it read last time. Limits: 600 pages per bot, 200 cards per board.
 
 ## Add things to the map
 
@@ -84,6 +86,12 @@ The distances are at the top of `public/world.js`.
 ## The arcade
 
 Two cabinets in The Afterworks run Lead Volley, a 1v1 paddle game. The first person plays the computer; a second person at the same cabinet makes it head to head. New games go in `public/arcade.js`.
+
+## Dancing, sound and decorating
+
+- **Dance:** V or the Dance button. Everyone sees it.
+- **Sound:** made in the browser in `public/sound.js` (no audio files), including an original loop for the dance floor. The Sound button mutes it.
+- **Decorate:** the Decorate button lets anyone ask the AI to dress the shared space they're standing in. Decorations are visual only (they never block anyone), are saved in the data folder, and reset after 24 hours. The areas are listed in `DECOR_AREAS` in `public/world.js`.
 
 ## Change the town
 

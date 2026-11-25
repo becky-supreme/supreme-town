@@ -52,7 +52,8 @@ export const KITCHEN = { x0: 27, y0: 14, x1: 34, y1: 25 };
 export const LUNCH = { x0: 35, y0: 14, x1: 58, y1: 25 };
 export const LOUNGE = { x0: 0, y0: 29, x1: 29, y1: 43 };
 export const BAR = { x0: 30, y0: 29, x1: 58, y1: 43 };
-const DANCE = { x0: 48, y0: 33, x1: 55, y1: 38 };
+export const DANCE = { x0: 48, y0: 33, x1: 55, y1: 38 };
+export const onDanceFloor = (x, y) => inside(DANCE, Math.floor(x), Math.floor(y));
 const inside = (r, i, j) => i >= r.x0 && i <= r.x1 && j >= r.y0 && j <= r.y1;
 
 export const DESKS = [];
@@ -61,6 +62,22 @@ for (const t of TEAMS) {
   for (const y of t.deskRows) {
     for (const dx of [0, 3, 6]) DESKS.push({ id: `${t.id}-${n++}`, team: t.id, x: t.ox + dx, y, w: 2, d: 1, seat: [t.ox + dx, y + 1] });
   }
+}
+
+// Areas anyone can redecorate with AI ("make the lunch area a birthday party").
+// Decorations are for looking at only: they never block anyone's way.
+export const DECOR_AREAS = [
+  { id: 'lounge', name: 'Co-working lounge', rect: LOUNGE },
+  { id: 'bar', name: 'The Afterworks bar', rect: BAR },
+  { id: 'lunch', name: 'Non-working social lunch', rect: LUNCH },
+  { id: 'kitchen', name: 'Kitchen', rect: KITCHEN },
+  { id: 'meeting', name: 'Meeting room', rect: ROOM },
+  { id: 'entrance', name: 'Entrance', rect: { x0: 0, y0: 9, x1: 12, y1: 13 } },
+  ...TEAMS.map((t) => ({ id: `team-${t.id}`, name: t.name, rect: { x0: t.ox, y0: t.y0, x1: t.ox + 11, y1: t.y1 } })),
+];
+export function decorAreaAt(x, y) {
+  const i = Math.floor(x), j = Math.floor(y);
+  return DECOR_AREAS.find((a) => inside(a.rect, i, j)) || null;
 }
 
 // A plain-English name for wherever someone is standing.
