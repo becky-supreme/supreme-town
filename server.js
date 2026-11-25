@@ -547,7 +547,7 @@ server.listen(PORT, () => {
   console.log(`Supreme Town is open at http://localhost:${PORT}`);
   console.log(useOpenRouter() ? `AI features on through OpenRouter (${OPENROUTER_MODEL}).` : hasAI() ? `AI features on (${MODEL}).` : 'No AI key found: desks use the six designs and the bots are asleep. See README.md.');
   console.log(authRequired() ? `Sign-in on: Google accounts at @${DOMAIN} only.` : 'No GOOGLE_CLIENT_ID set: running without logins. Fine on your own computer, not for a shared link.');
-  if (authRequired() && secretIsTemporary) console.log('No SESSION_SECRET set: everyone is signed out whenever the server restarts.');
+  if (authRequired() && secretIsTemporary) console.log('Could not save a session secret to the data folder: everyone is signed out whenever the server restarts.');
   const usesNotion = readBotConfig().some((b) => b.notion?.length);
   if (hasNotion()) {
     const minutes = Math.max(1, Number(process.env.NOTION_SYNC_MINUTES || 10));

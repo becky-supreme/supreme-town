@@ -10,8 +10,28 @@ export const CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 export const DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN || 'supremeopti.com').toLowerCase();
 export const authRequired = () => !!CLIENT_ID;
 
-const SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
-export const secretIsTemporary = !process.env.SESSION_SECRET;
+// The key that signs login cookies. Set SESSION_SECRET to choose it; otherwise one is
+// made the first time the server starts and kept in the data folder, so people stay
+// signed in across restarts and redeploys (on Railway, the data folder is the volume).
+function sessionSecret() {
+  if (process.env.SESSION_SECRET) return { value: process.env.SESSION_SECRET, temporary: false };
+  const dir = process.env.DATA_DIR || path.join(path.dirname(new URL(import.meta.url).pathname), 'data');
+  const file = path.join(dir, 'session-secret');
+  try {
+    const saved = fs.readFileSync(file, 'utf8').trim();
+    if (saved.length >= 32) return { value: saved, temporary: false };
+  } catch { /* first start */ }
+  const made = crypto.randomBytes(32).toString('hex');
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, made, { mode: 0o600 });
+    return { value: made, temporary: false };
+  } catch {
+    return { value: made, temporary: true }; // couldn't save it: logins last until the next restart
+  }
+}
+const { value: SECRET, temporary } = sessionSecret();
+export const secretIsTemporary = temporary;
 const DAYS = 30;
 const google = CLIENT_ID ? new OAuth2Client(CLIENT_ID) : null;
 

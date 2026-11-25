@@ -21,7 +21,8 @@ GOOGLE_CLIENT_ID=
 # Only emails at this domain can sign in
 ALLOWED_EMAIL_DOMAIN=supremeopti.com
 
-# Keeps people signed in across restarts. Any long random string.
+# Optional. Signs login cookies. Leave empty and the server makes one and keeps it
+# in the data folder, which is all you need.
 SESSION_SECRET=
 
 # Where desks, characters and Notion copies are saved. On Railway, point this
