@@ -1,4 +1,6 @@
-// Sign in with Google, limited to one email domain, plus saved characters.
+// Sign in with Google, plus saved characters. Any verified Google account can
+// sign in. DOMAIN is only the address suggested on the sign-in screen (a
+// @supremeopti.com account, unless ALLOWED_EMAIL_DOMAIN says otherwise).
 // With no GOOGLE_CLIENT_ID set, the office runs without logins (for use on
 // your own computer) and people just type a name.
 import crypto from 'node:crypto';
@@ -7,7 +9,7 @@ import path from 'node:path';
 import { OAuth2Client } from 'google-auth-library';
 
 export const CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
-export const DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN || 'supremeopti.com').toLowerCase();
+export const DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN || 'supremeopti.com').toLowerCase().replace(/^@/, '').replace(/[^a-z0-9.-]/g, '') || 'supremeopti.com';
 export const authRequired = () => !!CLIENT_ID;
 
 // The key that signs login cookies. Set SESSION_SECRET to choose it; otherwise one is
@@ -67,17 +69,24 @@ export function unseal(token) {
   }
 }
 
-// Checks the token Google hands the browser and returns the person's email and name.
-export async function verifyGoogle(credential) {
-  const ticket = await google.verifyIdToken({ idToken: String(credential || ''), audience: CLIENT_ID });
-  const p = ticket.getPayload();
-  const email = String(p?.email || '').toLowerCase();
-  if (!p?.email_verified || !email.endsWith(`@${DOMAIN}`)) {
-    const err = new Error(`Only @${DOMAIN} accounts can come in.`);
+// The person behind a Google ID token payload. Any verified email is accepted;
+// the suggested work domain is not a gate. Session cookies and Slack connections
+// are still keyed by this email, so an address that already signed in stays the
+// same person.
+export function identityFromGooglePayload(p) {
+  const email = String(p?.email || '').trim().toLowerCase();
+  if (p?.email_verified !== true || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    const err = new Error("That Google account has no verified email, so it can't be used to sign in.");
     err.friendly = true;
     throw err;
   }
   return { email, googleName: p.given_name || p.name || email.split('@')[0] };
+}
+
+// Checks the token Google hands the browser and returns the person's email and name.
+export async function verifyGoogle(credential) {
+  const ticket = await google.verifyIdToken({ idToken: String(credential || ''), audience: CLIENT_ID });
+  return identityFromGooglePayload(ticket.getPayload());
 }
 
 export function sessionCookie(email, secure) {

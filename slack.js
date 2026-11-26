@@ -6,9 +6,13 @@
 //     is the volume, so it survives restarts and redeploys. While they are in
 //     the town their status says "In Supreme Town". It is put back when they
 //     leave, and only if it is still the status we set.
-//   - A plain message in the account managers' channel when someone joins or
-//     leaves. A refresh, a second tab, or a dropped connection inside the grace
-//     period does not post again.
+//   - A plain message when someone joins or leaves. It goes to a private
+//     #supreme-town channel (created on startup when SLACK_TOWN_CHANNEL_ID is
+//     unset, and remembered in the data folder). If that channel cannot be
+//     created, the account managers' channel is used instead. A refresh, a
+//     second tab, or a dropped connection inside the grace period does not
+//     post again. People are invited into the private channel when they
+//     connect Slack or enter the town.
 //
 // Tokens and the client secret are never written to the log.
 
@@ -19,6 +23,10 @@ import path from 'node:path';
 export const STATUS_TEXT = 'In Supreme Town';
 export const STATUS_EMOJI = ':office:';
 export const USER_SCOPES = 'users.profile:read,users.profile:write';
+export const TOWN_CHANNEL_NAME = 'supreme-town';
+// Bot token scopes for the private channel: groups:write creates it and invites
+// people. chat:write posts. groups:read is only needed to find a channel that
+// already exists when this file has no saved id.
 export const DEVICE_MAX_AGE = 400 * 24 * 60 * 60;
 const STATUS_TTL_MS = 30 * 60 * 1000;
 const REFRESH_MS = 10 * 60 * 1000;
@@ -119,6 +127,7 @@ export function createSlack({
   const redirectUrl = trim(env.SLACK_REDIRECT_URL);
   const botToken = trim(env.SLACK_BOT_TOKEN);
   const channelId = trim(env.SLACK_AM_CHANNEL_ID);
+  const envTownId = trim(env.SLACK_TOWN_CHANNEL_ID);
   const grace = Number.isFinite(graceMs) && graceMs >= 0
     ? graceMs
     : (Number(env.SLACK_LEAVE_GRACE_MS) >= 5000 && Number(env.SLACK_LEAVE_GRACE_MS) <= 600_000
@@ -130,10 +139,15 @@ export function createSlack({
   const key = crypto.createHash('sha256').update(`supreme-town-slack:${secret || 'missing'}`).digest();
   const connFile = dataDir ? path.join(dataDir, 'slack-connections.json') : null;
   const hereFile = dataDir ? path.join(dataDir, 'slack-presence.json') : null;
+  const townFile = dataDir ? path.join(dataDir, 'slack-town-channel.json') : null;
 
   const connections = new Map(); // identity -> { token, slackUserId, scopes, connectedAt, previousStatus }
   const visits = new Map(); // identity -> { key, count, name, announced, holding, yielded, leaveTimer, onDead }
   const checked = new Map(); // identity -> timestamp of a good auth.test
+  const invited = new Set(); // slack user ids already in the private channel this run
+  const inviting = new Map(); // slack user id -> in-flight invite
+  let townChannelId = validChannel(envTownId) ? envTownId : '';
+  let missingScopeLogged = false;
   let interval = null;
 
   function note(message) {
@@ -317,11 +331,12 @@ export function createSlack({
         ? `Connect Slack is off because ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not set. People can enter the town without Slack, and statuses are not changed.`
         : 'Connect Slack is off because SLACK_REDIRECT_URL is not a valid http(s) URL. People can enter the town without Slack, and statuses are not changed.');
     }
-    if (!postsReady) {
-      const missing = ['SLACK_BOT_TOKEN', 'SLACK_AM_CHANNEL_ID'].filter((k) => !trim(env[k]));
-      lines.push(missing.length
-        ? `Join and leave posts are off because ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not set.`
-        : 'Join and leave posts are off because SLACK_AM_CHANNEL_ID does not look like a Slack channel id.');
+    if (!botToken) {
+      lines.push('Join and leave posts are off because SLACK_BOT_TOKEN is not set.');
+    } else if (!townChannelId && !validChannel(channelId) && trim(env.SLACK_AM_CHANNEL_ID)) {
+      lines.push('Join and leave posts are off because SLACK_AM_CHANNEL_ID does not look like a Slack channel id.');
+    } else if (!townChannelId && !validChannel(channelId) && trim(env.SLACK_TOWN_CHANNEL_ID) && !validChannel(envTownId)) {
+      lines.push('SLACK_TOWN_CHANNEL_ID does not look like a Slack channel id. The town will try to create a private #supreme-town channel.');
     }
     return lines.join(' ');
   }
@@ -377,6 +392,7 @@ export function createSlack({
     });
     checked.set(identity, now());
     saveConnections();
+    await inviteSlackUser(slackUserId);
     return { ok: true };
   }
 
@@ -407,9 +423,11 @@ export function createSlack({
   }
 
   async function post(text) {
-    if (!postsReady) return true;
+    await startup;
+    const channel = townChannelId || (validChannel(channelId) ? channelId : '');
+    if (!botToken || !channel) return true;
     const data = await slackApi(botToken, 'chat.postMessage', {
-      json: { channel: channelId, text, link_names: false, unfurl_links: false, unfurl_media: false },
+      json: { channel, text, link_names: false, unfurl_links: false, unfurl_media: false },
     });
     if (!data.ok) {
       slackError('Slack room post failed', data.error);
@@ -495,12 +513,12 @@ export function createSlack({
     rec.closing = true;
     rec.leaveTimer = null;
     let sentLeave = false;
-    if (rec.announced && postsReady) sentLeave = await post(leftText(rec.name));
+    if (rec.announced && await canPost()) sentLeave = await post(leftText(rec.name));
     const cameBack = () => visits.get(key) !== rec || rec.epoch !== epoch || rec.count > 0;
     if (cameBack()) {
       rec.closing = false;
       // The leave message already went out and they are here again, so correct it.
-      if (sentLeave && rec.count > 0 && postsReady) await post(joinedText(rec.name));
+      if (sentLeave && rec.count > 0 && await canPost()) await post(joinedText(rec.name));
       return;
     }
     rec.announced = false;
@@ -528,10 +546,11 @@ export function createSlack({
     }
     rec.closing = false;
     rec.count += 1;
+    await inviteIdentity(identity);
     if (rec.count > 1) { savePresence(); return; }
     if (!rec.announced && !rec.posting) {
       rec.posting = true;
-      const posted = postsReady ? await post(joinedText(rec.name)) : true;
+      const posted = (await canPost()) ? await post(joinedText(rec.name)) : true;
       rec.posting = false;
       if (posted) rec.announced = true;
       savePresence();
@@ -562,7 +581,7 @@ export function createSlack({
   async function refresh() {
     for (const rec of [...visits.values()]) {
       if (rec.count < 1 || rec.leaveTimer) continue;
-      if (!rec.announced && postsReady) {
+      if (!rec.announced && await canPost()) {
         const posted = await post(joinedText(rec.name));
         if (posted) { rec.announced = true; savePresence(); }
       }
@@ -570,7 +589,143 @@ export function createSlack({
     }
   }
 
+  function readSavedTownChannel() {
+    const saved = readJson(townFile);
+    const id = typeof saved?.id === 'string' ? saved.id.trim() : '';
+    return validChannel(id) ? id : '';
+  }
+  function saveTownChannel(id) {
+    writeJson(townFile, { id });
+  }
+  function warnMissingScope() {
+    if (missingScopeLogged) return;
+    missingScopeLogged = true;
+    const fallback = validChannel(channelId)
+      ? "Join and leave posts will use the account managers' channel until then."
+      : 'Join and leave posts stay off until then.';
+    note(`The Slack bot is missing the groups:write scope, so it cannot create the private #${TOWN_CHANNEL_NAME} channel or invite people into it (missing_scope). Add groups:write to the bot token and restart the town. ${fallback}`);
+  }
+  function fallbackPosts(error) {
+    slackError(`Could not open the private #${TOWN_CHANNEL_NAME} channel`, error);
+    if (validChannel(channelId)) note("Join and leave posts will use the account managers' channel until the private channel is ready. This is tried again the next time the town starts.");
+    else note(`Join and leave posts are off until the private #${TOWN_CHANNEL_NAME} channel can be created. This is tried again the next time the town starts.`);
+  }
+
+  // Private channels the bot is already in. Needs groups:read; create and invite
+  // themselves only need groups:write.
+  async function findPrivateTownChannel() {
+    let cursor = '';
+    for (let page = 0; page < 8; page++) {
+      const data = await slackApi(botToken, 'conversations.list', {
+        json: { types: 'private_channel', exclude_archived: true, limit: 200, ...(cursor ? { cursor } : {}) },
+      });
+      if (!data.ok) {
+        if (data.error === 'missing_scope') note(`Could not look for an existing private #${TOWN_CHANNEL_NAME} channel (missing_scope). Set SLACK_TOWN_CHANNEL_ID, or add groups:read so a channel the bot is already in can be found.`);
+        else slackError(`Could not look for the private #${TOWN_CHANNEL_NAME} channel`, data.error);
+        return null;
+      }
+      const channels = Array.isArray(data.channels) ? data.channels : [];
+      const hit = channels.find((c) => c && c.name === TOWN_CHANNEL_NAME && !c.is_archived && validChannel(c.id));
+      if (hit) return hit.id;
+      cursor = typeof data.response_metadata?.next_cursor === 'string' ? data.response_metadata.next_cursor : '';
+      if (!cursor) return null;
+    }
+    return null;
+  }
+
+  async function savedChannelOk(id) {
+    const data = await slackApi(botToken, 'conversations.info', { json: { channel: id } });
+    if (data.ok) return !(data.channel && data.channel.is_archived);
+    // Gone, or the bot is no longer in it (private channels hide themselves).
+    if (data.error === 'channel_not_found' || data.error === 'is_archived') return false;
+    return true; // can't check (missing scope, network): keep the saved id and try again next start only if posting fails
+  }
+
+  async function ensureTownChannel() {
+    if (!botToken) return null;
+    if (townChannelId) return townChannelId;
+    const saved = readSavedTownChannel();
+    if (saved && await savedChannelOk(saved)) {
+      townChannelId = saved;
+      return saved;
+    }
+    const created = await slackApi(botToken, 'conversations.create', {
+      json: { name: TOWN_CHANNEL_NAME, is_private: true },
+    });
+    const createdId = created.channel && validChannel(created.channel.id) ? created.channel.id : '';
+    if (created.ok && createdId) {
+      townChannelId = createdId;
+      saveTownChannel(createdId);
+      note(`Private Slack channel #${TOWN_CHANNEL_NAME} is ready.`);
+      return createdId;
+    }
+    if (created.error === 'name_taken') {
+      const found = await findPrivateTownChannel();
+      if (found) {
+        townChannelId = found;
+        saveTownChannel(found);
+        note(`Using the existing private Slack channel #${TOWN_CHANNEL_NAME}.`);
+        return found;
+      }
+    }
+    if (created.error === 'missing_scope') warnMissingScope();
+    else fallbackPosts(created.error);
+    return null;
+  }
+
+  async function inviteSlackUser(slackUserId) {
+    if (!botToken || typeof slackUserId !== 'string' || !/^[UW][A-Z0-9]+$/.test(slackUserId)) return;
+    if (invited.has(slackUserId)) return;
+    // Wait for the channel before inviting, but not from inside startup itself
+    // (that wait would never finish). Once the id is known, this is a direct call.
+    if (!townChannelId) {
+      await startup;
+      if (!townChannelId || invited.has(slackUserId)) return;
+    }
+    const pending = inviting.get(slackUserId);
+    if (pending) return pending;
+    const job = (async () => {
+      const data = await slackApi(botToken, 'conversations.invite', {
+        json: { channel: townChannelId, users: slackUserId },
+      });
+      if (data.ok || data.error === 'already_in_channel') {
+        invited.add(slackUserId);
+        return;
+      }
+      if (data.error === 'missing_scope') { warnMissingScope(); return; }
+      slackError(`Could not invite someone to the private #${TOWN_CHANNEL_NAME} channel`, data.error);
+    })();
+    inviting.set(slackUserId, job);
+    try { await job; } finally { inviting.delete(slackUserId); }
+  }
+
+  async function inviteIdentity(identity) {
+    const conn = identity ? connections.get(identity) : null;
+    if (conn?.slackUserId) await inviteSlackUser(conn.slackUserId);
+  }
+
+  async function backfillInvites() {
+    if (!townChannelId) return;
+    for (const row of connections.values()) {
+      if (row.slackUserId) await inviteSlackUser(row.slackUserId);
+    }
+  }
+
+  async function canPost() {
+    await startup;
+    return !!(botToken && (townChannelId || validChannel(channelId)));
+  }
+
   load();
+  // The channel is resolved in the background. Posts and invites wait for it.
+  // A missing groups:write scope is logged, not thrown, and the next start tries again.
+  const startup = ensureTownChannel().then(async (id) => {
+    if (id) await backfillInvites();
+    return id;
+  }).catch((err) => {
+    note(`Private Slack channel setup failed (${err && err.code ? err.code : 'error'}).`);
+    return null;
+  });
   interval = setInt(() => { refresh().catch(() => note('Slack status refresh failed (unknown)')); }, REFRESH_MS);
 
   function pauseForRestart() {

@@ -83,6 +83,8 @@ Changing the map never touches people's logins, characters or desk designs: thos
 
 The distances are at the top of `public/world.js`.
 
+If a microphone or camera unplugs, that person sees a warning they can click to reconnect, and the town tries the default microphone again on the calls already open. Other people see "no mic" on their name instead of silence with no explanation. A call that fails tries to reconnect before it is hung up and started again.
+
 ## The arcade
 
 Two cabinets in The Afterworks run Lead Volley, a 1v1 paddle game. The first person plays the computer; a second person at the same cabinet makes it head to head. New games go in `public/arcade.js`.
@@ -90,6 +92,7 @@ Two cabinets in The Afterworks run Lead Volley, a 1v1 paddle game. The first per
 ## Dancing, sound and decorating
 
 - **Dance:** V or the Dance button. Everyone sees it.
+- **Confetti:** Q (not while typing) throws confetti at whoever you are facing, or the nearest person if nobody is in front. Everyone nearby sees it, with both names. Once every couple of seconds.
 - **Who's here:** the "here" button lists everyone, with private messages, go to, follow, wave and invite. Private messages go only to the other person and aren't saved.
 - **Wave, invite over, follow:** click another person for the menu. Waves and invites aren't delivered to people set to In a meeting or Busy, and each person can send one every 2 seconds.
 - **Sound:** made in the browser in `public/sound.js` (no audio files), including an original loop for the dance floor. The Sound button mutes it.
@@ -110,7 +113,7 @@ Copy `env-template.txt` to `.env` and fill it in. Every setting is explained in 
 
 ## Logins and characters
 
-With `GOOGLE_CLIENT_ID` set, people sign in with Google and only `@supremeopti.com` accounts get in (change with `ALLOWED_EMAIL_DOMAIN`). They stay signed in for 30 days. The first time, they make a character (name, shirt, hair, skin); it is saved against their email and follows them to any browser.
+With `GOOGLE_CLIENT_ID` set, people sign in with Google. Any Google account can come in. The sign-in screen suggests `@supremeopti.com` (change the suggestion with `ALLOWED_EMAIL_DOMAIN`); that domain is not a rule. They stay signed in for 30 days. The first time, they make a character (name, shirt, hair, skin); it is saved against their email and follows them to any browser. A Google Cloud consent screen set to Internal still only allows your Workspace users, which is Google's own setting, not this app.
 
 To get a client ID: Google Cloud Console → APIs & Services → Credentials → Create credentials → OAuth client ID → Web application. Under "Authorised JavaScript origins" add the address the office is hosted at (and `http://localhost:3210` for testing). Setting the consent screen's user type to Internal also limits it to your Google Workspace.
 
@@ -118,7 +121,7 @@ With no client ID, there are no logins and people just type a name. That is only
 
 ## Slack
 
-While someone is in the town, their Slack status says **In Supreme Town** (office emoji). When they leave, disconnect, or time out, that status is removed only if it is still the one the town set, so a status they chose themselves is left as they set it. If they already had a status, it is put back. The account managers' channel also gets a plain line, with no @mentions: "Jake has joined Supreme Town" or "Jake has left Supreme Town". A refresh, a second tab, or a short drop does not post twice. The town waits about a minute and a half before saying someone has left.
+While someone is in the town, their Slack status says **In Supreme Town** (office emoji). When they leave, disconnect, or time out, that status is removed only if it is still the one the town set, so a status they chose themselves is left as they set it. If they already had a status, it is put back. A private channel named **supreme-town** gets a plain line, with no @mentions: "Jake has joined Supreme Town" or "Jake has left Supreme Town". If `SLACK_TOWN_CHANNEL_ID` is unset, the bot creates that private channel (or reuses it when the bot is already in it) and saves the id in the data folder. If the channel cannot be created, the account managers' channel is used instead. People are invited in when they connect Slack or enter the town, including everyone already connected the next time the town starts. A refresh, a second tab, or a short drop does not post twice. The town waits about a minute and a half before saying someone has left.
 
 Connect Slack is required before Enter works. Each person does it once. With Google sign-in, the connection is remembered against their email, on any browser. Without Google sign-in, a long-lived cookie remembers that browser. If Slack later rejects the connection, they are asked again. If the settings below are missing, the server logs a warning, skips the step, and the town still runs.
 
@@ -127,7 +130,7 @@ Connections are saved in the data folder (`DATA_DIR`, the Railway volume at `/da
 ### Slack app
 
 1. Create a Slack app at https://api.slack.com/apps in the Supreme Optimization workspace.
-2. Under **OAuth & Permissions**, add the bot scope `chat:write`.
+2. Under **OAuth & Permissions**, add the bot scopes `chat:write` and `groups:write`. `groups:write` is what lets the bot create the private channel and invite people. `groups:read` is optional; it is only used to find a `#supreme-town` channel the bot is already in when the saved id is missing.
 3. Add the user scopes `users.profile:read` and `users.profile:write`. The read scope is how the town checks the status is still its own before clearing it.
 4. Add this redirect URL: `https://supreme-town-production.up.railway.app/api/slack/callback`
 5. Install the app to the workspace and copy the **Bot User OAuth Token** (`xoxb-...`). Invite the app into the account managers' channel, and copy that channel's ID (`C...`, from the channel details).
@@ -140,6 +143,8 @@ On the `supreme-town` service, set:
 ```
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_AM_CHANNEL_ID=C...
+# Optional. Leave unset and the bot creates a private #supreme-town channel.
+# SLACK_TOWN_CHANNEL_ID=C...
 SLACK_CLIENT_ID=...
 SLACK_CLIENT_SECRET=...
 SLACK_REDIRECT_URL=https://supreme-town-production.up.railway.app/api/slack/callback

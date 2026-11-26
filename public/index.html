@@ -36,6 +36,7 @@
   .tile.camoff .initial, .tile.novideo .initial { display: flex; }
   .tile .nm { position: absolute; left: 6px; bottom: 5px; font-size: 11px; background: rgba(0,0,0,.6); padding: 1px 6px; border-radius: 6px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tile.muted .nm::after { content: " · muted"; color: #ff9aa2; }
+  .tile.nomic .nm::after { content: " · no mic"; color: #ffb020; }
 
   #screens { position: fixed; top: 124px; left: 50%; transform: translateX(-50%); z-index: 5; display: flex; gap: 10px; align-items: flex-start; max-width: 96vw; }
   .screen { position: relative; width: min(46vw, 640px); border-radius: 12px; overflow: hidden; border: 2px solid var(--accent); background: #000; cursor: zoom-in; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
@@ -45,6 +46,9 @@
   body.quiet #screens { display: none; }
   #toolbar button.sharing { background: var(--accent); border-color: var(--accent); color: #fff; }
   #banner { position: fixed; top: 0; left: 0; right: 0; z-index: 6; background: var(--danger); color: #fff; text-align: center; padding: 8px 12px; font-weight: 600; display: none; }
+  #deviceWarn { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 26; background: #d97706; color: #fff; border: 0; border-radius: 999px; padding: 8px 16px; font-weight: 700; max-width: min(560px, calc(100vw - 24px)); text-align: center; box-shadow: 0 6px 20px rgba(0,0,0,.35); }
+  #deviceWarn[hidden] { display: none !important; }
+  body.quiet #deviceWarn { top: 46px; }
   body.quiet #banner { display: block; }
   body.quiet #videos { display: none; }
   body.busy #banner { background: #d97706; }
@@ -168,6 +172,7 @@
 <canvas id="stage"></canvas>
 <div id="welcome"><small>You're now in</small><b>SUPREME TOWN</b></div>
 <div id="banner"></div>
+<button id="deviceWarn" type="button" hidden>Your microphone disconnected, click to reconnect.</button>
 <div id="recNotice" role="status"></div>
 <div id="where"></div>
 <div id="videos"></div>
@@ -208,13 +213,14 @@
 <div id="join">
   <div id="signin" hidden>
     <h1>Supreme Town</h1>
-    <p id="signinText">Sign in with your Supreme Google account to come in.</p>
+    <p id="signinText">Sign in with Google.</p>
+    <p id="signinHint">Your @supremeopti.com account is the suggested one. Any Google account can come in.</p>
     <div id="gbtn"></div>
     <p class="status err" id="signinErr"></p>
   </div>
   <form id="joinForm" hidden>
     <h1>Supreme Town</h1>
-    <p id="joinText">Walk around, talk to whoever is nearby, sit anywhere, grab a drink, hop in a go-kart.</p>
+    <p id="joinText">Walk around, talk to whoever is nearby, sit anywhere, grab a drink, hop in a go-kart. Press Q to throw confetti.</p>
     <input type="text" id="joinName" placeholder="Your name" maxlength="24" required autocomplete="off">
     <div class="maker">
       <canvas id="lookPreview" width="150" height="190" aria-label="Preview of your character"></canvas>

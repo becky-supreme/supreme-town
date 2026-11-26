@@ -9,8 +9,9 @@ import { WebSocketServer } from 'ws';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { DESKS, SPAWNS, W, H, ITEMS, RIDES, staticObjects, zoneOf, isShared, hearRadius, DECOR_AREAS, decorAreaAt, CHAIRS } from './public/world.js';
+import { DESKS, SPAWNS, W, H, ITEMS, RIDES, staticObjects, spatiallyNear, DECOR_AREAS, decorAreaAt, CHAIRS } from './public/world.js';
 import { musicConflict } from './public/music-rules.js';
+import { confettiBroadcast } from './public/confetti.js';
 import { PRESETS, BANK, presetFromPrompt, sanitiseDesign } from './public/presets.js';
 import { cleanLook, avatarBoxes, sanitiseCharacter } from './public/avatar.js';
 import { hasNotion, readBotSources, pickSections, friendlyNotionError } from './notion.js';
@@ -383,14 +384,13 @@ function moveAllowed(p, x, y) {
 }
 function canHear(a, b) {
   if (a.status !== 'available' || b.status !== 'available') return false;
-  const za = zoneOf(a.x, a.y), zb = zoneOf(b.x, b.y);
-  if (isShared(za) || isShared(zb)) return za === zb;
-  return Math.hypot(a.x - b.x, a.y - b.y) <= Math.min(hearRadius(za), hearRadius(zb)) + 2.5;
+  return spatiallyNear(a, b);
 }
 // Only the expected parts of a call set-up message are passed on.
 function cleanSignal(d) {
   if (!d || typeof d !== 'object') return null;
   if (d.bye === true) return { bye: true };
+  if (d.restart === true && !d.sdp && !d.ice) return { restart: true };
   if (d.sdp && (d.sdp.type === 'offer' || d.sdp.type === 'answer') && typeof d.sdp.sdp === 'string' && d.sdp.sdp.length < 60000) return { sdp: { type: d.sdp.type, sdp: d.sdp.sdp } };
   if (d.ice && typeof d.ice.candidate === 'string' && d.ice.candidate.length < 2000) {
     return { ice: { candidate: d.ice.candidate, sdpMid: d.ice.sdpMid == null ? null : String(d.ice.sdpMid).slice(0, 40), sdpMLineIndex: Number.isInteger(d.ice.sdpMLineIndex) ? d.ice.sdpMLineIndex : null, usernameFragment: d.ice.usernameFragment == null ? null : String(d.ice.usernameFragment).slice(0, 80) } };
@@ -411,7 +411,7 @@ function leaveCabinets(id) {
     tellCabinet(cab);
   }
 }
-const pub = (p) => ({ id: p.id, name: p.name, look: p.look, x: p.x, y: p.y, f: p.f, status: p.status, muted: p.muted, camOff: p.camOff, item: p.item, ride: p.ride, screen: p.screen, dance: p.dance, rec: !!p.rec, music: p.music || null, musicLabel: p.musicLabel || null });
+const pub = (p) => ({ id: p.id, name: p.name, look: p.look, x: p.x, y: p.y, f: p.f, status: p.status, muted: p.muted, camOff: p.camOff, micDown: !!p.micDown, item: p.item, ride: p.ride, screen: p.screen, dance: p.dance, rec: !!p.rec, music: p.music || null, musicLabel: p.musicLabel || null });
 // One person plays music in a shared room, or within earshot out in the open.
 // The stream id is the browser's own id (letters, numbers, dots and dashes).
 function musicStreamId(s) {
@@ -737,7 +737,7 @@ wss.on('connection', (ws, req) => {
             name,
             look: (email && users.get(email)?.look) || cleanLook(m.look),
             x: sx + 0.5, y: sy + 0.5, f: 'y+', email,
-            status: ['available', 'meeting', 'busy'].includes(m.status) ? m.status : 'available', muted: !!m.muted, camOff: !!m.camOff, item: ITEMS.includes(m.item) ? m.item : null, ride: Object.hasOwn(RIDES, m.ride) ? m.ride : null, screen: null, dance: false, rec: false, music: null, musicLabel: null, ws,
+            status: ['available', 'meeting', 'busy'].includes(m.status) ? m.status : 'available', muted: !!m.muted, camOff: !!m.camOff, micDown: !!m.micDown, item: ITEMS.includes(m.item) ? m.item : null, ride: Object.hasOwn(RIDES, m.ride) ? m.ride : null, screen: null, dance: false, rec: false, music: null, musicLabel: null, ws,
             slackIdentity: presenceKey(who, name),
           };
           if (!alive || ws.readyState !== 1) { me = null; return; }
@@ -773,13 +773,13 @@ wss.on('connection', (ws, req) => {
       broadcast({ t: 'look', id: me.id, name: me.name, look: me.look }, me.id);
     } else if (m.t === 'state') {
       me.status = STATUSES.includes(m.status) ? m.status : 'available';
-      me.muted = !!m.muted; me.camOff = !!m.camOff;
+      me.muted = !!m.muted; me.camOff = !!m.camOff; me.micDown = !!m.micDown;
       me.item = ITEMS.includes(m.item) ? m.item : null;
       me.ride = Object.hasOwn(RIDES, m.ride) ? m.ride : null;
       me.screen = typeof m.screen === 'string' && m.screen ? m.screen.slice(0, 80) : null;
       me.dance = !!m.dance;
       me.rec = !!m.rec && me.status === 'available'; // recording a call (saved on their own computer)
-      broadcast({ t: 'state', id: me.id, status: me.status, muted: me.muted, camOff: me.camOff, item: me.item, ride: me.ride, screen: me.screen, dance: me.dance, rec: me.rec }, me.id);
+      broadcast({ t: 'state', id: me.id, status: me.status, muted: me.muted, camOff: me.camOff, micDown: me.micDown, item: me.item, ride: me.ride, screen: me.screen, dance: me.dance, rec: me.rec }, me.id);
       if (me.status !== 'available') clearMusic(me, 'status');
     } else if (m.t === 'poke') {
       // Waving at someone, or inviting them over. Everyone sees a wave; only the
@@ -795,6 +795,24 @@ wss.on('connection', (ws, req) => {
       if (to.status !== 'available') return ws.send(JSON.stringify({ t: 'poke-result', to: to.id, kind, ok: false, reason: to.status === 'busy' ? 'busy' : 'meeting' }));
       if (to.ws.readyState === 1) to.ws.send(JSON.stringify({ t: 'poke', from: me.id, name: me.name, kind }));
       ws.send(JSON.stringify({ t: 'poke-result', to: to.id, kind, ok: true }));
+    } else if (m.t === 'confetti') {
+      // A handful of confetti, at most once every couple of seconds. People
+      // nearby see it. A target who isn't nearby just doesn't get named.
+      const decision = confettiBroadcast({
+        from: me,
+        toId: typeof m.to === 'string' ? m.to : null,
+        people: [...players.values()],
+        isNear: spatiallyNear,
+        now: Date.now(),
+        lastAt: me.lastConfetti || 0,
+      });
+      if (!decision.ok) return;
+      me.lastConfetti = decision.lastAt;
+      const raw = JSON.stringify(decision.event);
+      for (const p of players.values()) {
+        if (p.id === me.id || p.ws.readyState !== 1 || !spatiallyNear(me, p)) continue;
+        p.ws.send(raw);
+      }
     } else if (m.t === 'dm') {
       // A private message to one person. Delivered even when they're Busy (they
       // just aren't pinged), limited to a few a second.
@@ -881,11 +899,11 @@ rebuildSolid();
 server.listen(PORT, () => {
   console.log(`Supreme Town is open at http://localhost:${PORT}`);
   console.log(useOpenRouter() ? `AI features on through OpenRouter (${OPENROUTER_MODEL}).` : hasAI() ? `AI features on (${MODEL}).` : 'No AI key found: desks use the six designs and the bots are asleep. See README.md.');
-  console.log(authRequired() ? `Sign-in on: Google accounts at @${DOMAIN} only.` : 'No GOOGLE_CLIENT_ID set: running without logins. Fine on your own computer, not for a shared link.');
+  console.log(authRequired() ? `Sign-in on: any Google account. The sign-in screen suggests @${DOMAIN}.` : 'No GOOGLE_CLIENT_ID set: running without logins. Fine on your own computer, not for a shared link.');
   if (authRequired() && secretIsTemporary) console.log('Could not save a session secret to the data folder: everyone is signed out whenever the server restarts.');
   const slackNote = slack.warning();
   if (slackNote) console.warn(slackNote);
-  else console.log('Slack is on: people connect once, their status shows they are here, and the account managers\' channel hears arrivals and departures.');
+  else console.log('Slack is on: people connect once, their status shows they are here, and arrivals and departures are posted in Slack.');
   if (slack.gateRequired() && secretIsTemporary) console.warn('The session secret could not be saved, so Slack connections will not survive a restart.');
   const usesNotion = readBotConfig().some((b) => b.notion?.length);
   if (hasNotion()) {

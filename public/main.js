@@ -1,4 +1,4 @@
-import { W, H, DESKS, zoneOf, isShared, hearRadius, staticObjects, robot, areaAt, RIDES, CHAIRS, DANCE, onDanceFloor, DECOR_AREAS, decorAreaAt } from './world.js';
+import { W, H, DESKS, zoneOf, isShared, hearRadius, spatiallyNear, staticObjects, robot, areaAt, RIDES, CHAIRS, DANCE, onDanceFloor, DECOR_AREAS, decorAreaAt } from './world.js';
 import * as sound from './sound.js';
 import { createRecorder, canRecord } from './recorder.js';
 import { PRESETS, BANK } from './presets.js';
@@ -8,6 +8,8 @@ import { avatarBoxes, OUTFITS, HAIRSTYLES } from './avatar.js';
 import { createRTC } from './rtc.js';
 import { createMusic } from './music.js';
 import { createArcade } from './arcade.js';
+import { deviceStillPresent, deviceWarning, lossFromTrack } from './media-health.js';
+import { allowThrow, burstDone, confettiCaption, createBurst, pickConfettiTarget, placeBurst } from './confetti.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('stage');
@@ -153,7 +155,7 @@ let reconnectTries = 0;
 function connect(profile) {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`);
   ws.onopen = () => {
-    const where = me ? { status: me.status, muted: me.muted, camOff: me.camOff, item: me.item, ride: me.ride } : {};
+    const where = me ? { status: me.status, muted: me.muted, camOff: me.camOff, micDown: !!me.micDown, item: me.item, ride: me.ride } : {};
     send({ t: 'join', ...profile, ...(me ? { name: me.name, look: me.look } : {}), ...where });
   };
   ws.onclose = (e) => {
@@ -177,7 +179,12 @@ function connect(profile) {
       scene.setItems(townItems);
       players.clear();
       for (const p of m.players) players.set(p.id, norm({ ...p, tx: p.x, ty: p.y, step: 0 }));
+      const camDown = !!me?.camDown;
+      const cause = me?.mediaCause;
       me = norm({ ...m.you, path: [], step: 0 });
+      if (camDown) me.camDown = true;
+      if (cause) me.mediaCause = cause;
+      if (pendingNoMic) { me.micDown = true; me.mediaCause = 'unavailable'; pendingNoMic = false; sendState(); }
       me.rec = recorder.active();
       players.set(me.id, me);
       if (back && me.rec) sendState();
@@ -217,7 +224,7 @@ function connect(profile) {
       if (p) { p.look = m.look; p.name = m.name; }
     } else if (m.t === 'state') {
       const p = players.get(m.id);
-      if (p) norm(Object.assign(p, { status: m.status, muted: m.muted, camOff: m.camOff, item: m.item, ride: m.ride, screen: m.screen, dance: m.dance, rec: m.rec }));
+      if (p) norm(Object.assign(p, { status: m.status, muted: m.muted, camOff: m.camOff, micDown: !!m.micDown, item: m.item, ride: m.ride, screen: m.screen, dance: m.dance, rec: m.rec }));
     } else if (m.t === 'dm') {
       const thread = dmThreads.get(m.from) || [];
       thread.push({ mine: false, text: m.text });
@@ -229,6 +236,9 @@ function connect(profile) {
         if (!me?.meeting) sound.play('chat');
         toast(`${m.name}: ${m.text.length > 80 ? m.text.slice(0, 80) + '…' : m.text}`, [{ label: 'Reply', go: true, run: () => openDm(m.from) }], 12000);
       }
+    } else if (m.t === 'confetti') {
+      showConfetti({ fromId: m.from, toId: m.to, fromName: m.name, toName: m.toName });
+      sound.play('confetti');
     } else if (m.t === 'emote') {
       const p = players.get(m.id);
       if (p) p.emoteUntil = performance.now() + 1800;
@@ -288,6 +298,13 @@ function logChat(name, text) {
 
 // ---------- microphone, camera and status ----------
 let localStream = null;
+let pendingNoMic = false;
+let hadMic = false;
+let hadCam = false;
+let mediaFailUntil = 0;
+let mediaJob = Promise.resolve();
+const confettiThrows = [];
+let lastConfetti = null;
 const myTile = (() => {
   const tile = document.createElement('div');
   tile.className = 'tile me novideo';
@@ -302,10 +319,141 @@ async function acquireMedia() {
   try { return await navigator.mediaDevices.getUserMedia({ audio, video: { width: 320, height: 240 } }); } catch { /* try sound only */ }
   try { return await navigator.mediaDevices.getUserMedia({ audio }); } catch { return null; }
 }
+function liveTrack(kind) {
+  return localStream?.getTracks().find((t) => t.kind === kind && t.readyState === 'live') || null;
+}
+function markTrack(track) {
+  if (!track || track.__hqWatched) return;
+  track.__hqWatched = true;
+  track.addEventListener('ended', () => {
+    if (track.__hqIgnoreEnd) return;
+    const which = lossFromTrack(track);
+    if (!which || me?.meeting) return;
+    onDeviceLoss({ audio: which === 'mic', video: which === 'camera' });
+  });
+}
+function adoptStream(stream) {
+  if (!stream) return;
+  localStream = stream;
+  for (const t of stream.getTracks()) {
+    markTrack(t);
+    if (t.kind === 'audio') hadMic = true;
+    if (t.kind === 'video') hadCam = true;
+  }
+  if (liveTrack('audio') && me) { me.micDown = false; me.mediaCause = ''; }
+  rtc.setLocalStream(stream);
+  const preview = myTile.querySelector('video');
+  if (preview.srcObject !== stream) preview.srcObject = stream;
+}
+function releaseStream() {
+  localStream?.getTracks().forEach((t) => { t.__hqIgnoreEnd = true; try { t.stop(); } catch { /* already ended */ } });
+  localStream = null;
+  rtc.setLocalStream(null);
+}
+function installTrack(kind, track) {
+  if (!localStream) localStream = new MediaStream();
+  for (const old of localStream.getTracks().filter((t) => t.kind === kind)) {
+    old.__hqIgnoreEnd = true;
+    localStream.removeTrack(old);
+    try { old.stop(); } catch { /* already ended */ }
+  }
+  localStream.addTrack(track);
+  markTrack(track);
+  if (kind === 'audio') hadMic = true;
+  else hadCam = true;
+  rtc.setLocalStream(localStream);
+  rtc.replaceOutgoingTrack(kind, track);
+  const preview = myTile.querySelector('video');
+  if (preview.srcObject !== localStream) preview.srcObject = localStream;
+}
+function refreshDeviceWarning() {
+  const el = $('deviceWarn');
+  if (!el) return;
+  const text = deviceWarning({
+    micDown: !!(me?.micDown || pendingNoMic),
+    camDown: !!me?.camDown,
+    cause: me?.mediaCause || (pendingNoMic ? 'unavailable' : 'disconnected'),
+  });
+  el.hidden = !text;
+  el.textContent = text;
+}
+function onDeviceLoss({ audio = false, video = false }) {
+  if (me?.meeting) return;
+  if (audio && me) { me.micDown = true; me.mediaCause = hadMic ? 'disconnected' : 'unavailable'; }
+  if (video && me) me.camDown = true;
+  refreshDeviceWarning();
+  if (me) { applyMedia(); sendState(); }
+  reacquire({ audio, video });
+}
+function reacquire(which, manual = false) {
+  mediaJob = mediaJob.then(() => reacquireOnce(which, manual)).catch((err) => console.warn('reconnect failed', err));
+  return mediaJob;
+}
+async function reacquireOnce({ audio = false, video = false }, manual) {
+  if (!audio && !video) return false;
+  if (!manual && mediaFailUntil > Date.now()) { refreshDeviceWarning(); return false; }
+  if (me?.meeting) return false;
+  if (!navigator.mediaDevices?.getUserMedia) {
+    if (me) {
+      if (audio) { me.micDown = true; me.mediaCause = 'unavailable'; }
+      if (video) me.camDown = true;
+    } else if (audio) pendingNoMic = true;
+    refreshDeviceWarning();
+    return false;
+  }
+  let ok = true;
+  if (audio) ok = await takeDevice('audio') && ok;
+  if (video) ok = await takeDevice('video') && ok;
+  mediaFailUntil = ok ? 0 : Date.now() + 4000;
+  refreshDeviceWarning();
+  if (me) { applyMedia(); sendState(); }
+  return ok;
+}
+async function takeDevice(kind) {
+  const constraints = kind === 'audio'
+    ? { audio: { echoCancellation: true, noiseSuppression: true } }
+    : { video: { width: 320, height: 240 } };
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    const track = stream.getTracks().find((t) => t.kind === kind);
+    stream.getTracks().forEach((t) => { if (t !== track) { try { t.stop(); } catch { /* ignore */ } } });
+    if (!track) throw new Error('no track');
+    installTrack(kind, track);
+    if (me) {
+      if (kind === 'audio') { me.micDown = false; me.mediaCause = ''; }
+      else me.camDown = false;
+    }
+    if (kind === 'audio') pendingNoMic = false;
+    return true;
+  } catch (err) {
+    console.warn(`${kind} reconnect failed`, err);
+    if (me) {
+      if (kind === 'audio') { me.micDown = true; me.mediaCause = hadMic ? 'disconnected' : 'unavailable'; }
+      else me.camDown = true;
+    } else if (kind === 'audio') pendingNoMic = true;
+    return false;
+  }
+}
+async function checkDevices() {
+  if (!localStream || me?.meeting || !navigator.mediaDevices?.enumerateDevices) return;
+  let devices = [];
+  try { devices = await navigator.mediaDevices.enumerateDevices(); } catch { return; }
+  const audio = liveTrack('audio');
+  const video = liveTrack('video');
+  const micGone = !!audio && !deviceStillPresent(audio.getSettings?.().deviceId, devices.filter((d) => d.kind === 'audioinput'));
+  const camGone = !!video && !deviceStillPresent(video.getSettings?.().deviceId, devices.filter((d) => d.kind === 'videoinput'));
+  if (micGone || camGone) onDeviceLoss({ audio: micGone, video: camGone });
+}
+let deviceTimer = 0;
+navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+  clearTimeout(deviceTimer);
+  deviceTimer = setTimeout(checkDevices, 400);
+});
 function applyMedia() {
+  if (!me) { refreshDeviceWarning(); return; }
   const quiet = me.meeting;
-  const hasMic = !!localStream?.getAudioTracks().length;
-  const hasCam = !!localStream?.getVideoTracks().length;
+  const hasMic = !!liveTrack('audio');
+  const hasCam = !!liveTrack('video');
   localStream?.getAudioTracks().forEach((t) => { t.enabled = !me.muted; });
   localStream?.getVideoTracks().forEach((t) => { t.enabled = !me.camOff; });
   myTile.querySelector('video').srcObject = localStream;
@@ -316,6 +464,9 @@ function applyMedia() {
   mic.disabled = cam2.disabled = quiet;
   mic.textContent = !hasMic && !quiet ? 'No mic' : me.muted || quiet ? 'Mic off' : 'Mic on';
   cam2.textContent = !hasCam && !quiet ? 'No camera' : me.camOff || quiet ? 'Camera off' : 'Camera on';
+  mic.title = !hasMic && !quiet ? 'Click to reconnect your microphone' : 'Turn your microphone on or off';
+  cam2.title = !hasCam && !quiet && (hadCam || me.camDown) ? 'Click to reconnect your camera' : 'Turn your camera on or off';
+  myTile.classList.toggle('nomic', !!me.micDown && !quiet);
   mic.classList.toggle('off', me.muted || quiet || !hasMic);
   cam2.classList.toggle('off', me.camOff || quiet || !hasCam);
   for (const b of $('status').children) b.classList.toggle('on', b.dataset.status === me.status);
@@ -335,8 +486,9 @@ function applyMedia() {
   $('btnDance').textContent = me.dance ? 'Stop dancing' : 'Dance';
   $('btnSound').textContent = sound.isMuted() ? 'Sound off' : 'Sound on';
   $('btnSound').classList.toggle('off', sound.isMuted());
+  refreshDeviceWarning();
 }
-function sendState() { send({ t: 'state', status: me.status, muted: me.muted, camOff: me.camOff, item: me.item, ride: me.ride, screen: me.screen || null, dance: !!me.dance, rec: recorder.active() }); }
+function sendState() { send({ t: 'state', status: me.status, muted: me.muted, camOff: me.camOff, micDown: !!me.micDown, item: me.item, ride: me.ride, screen: me.screen || null, dance: !!me.dance, rec: recorder.active() }); }
 
 // ---------- dancing, sound and decorating ----------
 function setDance(on) {
@@ -656,8 +808,19 @@ function stopShare() {
 }
 $('btnScreen').onclick = () => (screenStream ? stopShare() : startShare());
 
-$('btnMic').onclick = () => { me.muted = !me.muted; applyMedia(); sendState(); };
-$('btnCam').onclick = () => { me.camOff = !me.camOff; applyMedia(); sendState(); };
+$('btnMic').onclick = () => {
+  if (!me) return;
+  if (!liveTrack('audio')) { reacquire({ audio: true }, true); return; }
+  me.muted = !me.muted; applyMedia(); sendState();
+};
+$('btnCam').onclick = () => {
+  if (!me) return;
+  if (!liveTrack('video') && (hadCam || me.camDown)) { reacquire({ video: true }, true); return; }
+  me.camOff = !me.camOff; applyMedia(); sendState();
+};
+$('deviceWarn').onclick = () => {
+  reacquire({ audio: !!(me?.micDown || pendingNoMic), video: !!me?.camDown }, true);
+};
 $('btnRide').onclick = () => { me.ride = null; sound.play('hopOff'); applyMedia(); sendState(); };
 $('btnItem').onclick = () => { me.item = null; applyMedia(); sendState(); };
 async function setStatus(status) {
@@ -671,18 +834,19 @@ async function setStatus(status) {
     music.stop();
     // Hang up on everyone and let go of the mic and camera so another call can use them.
     rtc.closeAll();
-    localStream?.getTracks().forEach((t) => t.stop());
-    localStream = null;
-    rtc.setLocalStream(null);
+    releaseStream();
   }
   applyMedia();
   sendState();
   music.update();
   if (wasQuiet && !me.meeting) {
     const stream = await acquireMedia();
-    if (me.meeting) { stream?.getTracks().forEach((t) => t.stop()); return; }
-    localStream = stream;
-    rtc.setLocalStream(stream);
+    if (!stream) {
+      if (me) { me.micDown = true; me.mediaCause = 'unavailable'; sendState(); refreshDeviceWarning(); }
+      return;
+    }
+    if (me.meeting) { stream.getTracks().forEach((t) => { t.__hqIgnoreEnd = true; t.stop(); }); return; }
+    adoptStream(stream);
     applyMedia();
   }
 }
@@ -811,18 +975,28 @@ async function startSignIn() {
   const info = await fetch('/api/me').then((r) => r.json());
   if (!info.authRequired || info.user) return showCharacter(info.user);
   $('signin').hidden = false;
-  $('signinText').textContent = `Sign in with your @${info.domain} Google account to come in.`;
+  const domain = info.domain || 'supremeopti.com';
+  $('signinText').textContent = 'Sign in with Google.';
+  $('signinHint').textContent = `Your @${domain} account is the suggested one. Any Google account can come in.`;
+  const hinted = store('hq.email');
   const script = document.createElement('script');
   script.src = 'https://accounts.google.com/gsi/client';
   script.onload = () => {
-    google.accounts.id.initialize({
+    // The hosted-domain option filters the account list, so it is not set:
+    // that would block every address except @domain. The sentence above is the hint.
+    const setup = {
       client_id: info.clientId,
       callback: async ({ credential }) => {
         const r = await fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ credential }) });
         const data = await r.json();
-        if (data.user) { showCharacter(data.user); loadConfig(); } else $('signinErr').textContent = data.error || 'Sign-in failed.';
+        if (data.user) {
+          if (data.user.email) store('hq.email', data.user.email);
+          showCharacter(data.user); loadConfig();
+        } else $('signinErr').textContent = data.error || 'Sign-in failed.';
       },
-    });
+    };
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(hinted || '')) setup.login_hint = hinted;
+    google.accounts.id.initialize(setup);
     google.accounts.id.renderButton($('gbtn'), { theme: 'filled_blue', size: 'large', text: 'signin_with', shape: 'pill' });
   };
   script.onerror = () => { $('signinErr').textContent = "Couldn't load Google sign-in. Check your connection."; };
@@ -883,12 +1057,16 @@ $('joinForm').onsubmit = async (e) => {
   const wait = setInterval(() => { if (me) { clearInterval(wait); applyMedia(); } }, 50);
   // Don't hold people at the door while the browser asks about the mic and camera.
   const stream = await acquireMedia();
-  if (!stream) return;
-  if (me?.meeting) { stream.getTracks().forEach((t) => t.stop()); return; }
-  localStream = stream;
-  rtc.setLocalStream(stream);
+  if (!stream) {
+    if (me) { me.micDown = true; me.mediaCause = 'unavailable'; sendState(); }
+    else pendingNoMic = true;
+    refreshDeviceWarning();
+    return;
+  }
+  if (me?.meeting) { stream.getTracks().forEach((t) => { t.__hqIgnoreEnd = true; t.stop(); }); return; }
+  adoptStream(stream);
   rtc.closeAll(); // calls already under way restart with our mic and camera
-  if (me) applyMedia();
+  if (me) { me.micDown = false; applyMedia(); sendState(); }
 };
 // The receptionists and AI switches. With sign-in on, the server only answers once you
 // are signed in, so this is asked again after signing in and again on joining.
@@ -902,13 +1080,14 @@ loadConfig();
 rebuildObjects();
 
 // ---------- input ----------
-function typing() { return ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName); }
+function typing() { return ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName); }
 addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { arcade.close(); closePanel(); music.closePrompt(); document.activeElement?.blur(); return; }
   if (typing() || !me || arcade.isOpen()) return; // the arcade has the keyboard while you play
   if (e.key === 'Enter') { $('chatInput').focus(); e.preventDefault(); return; }
   if (e.key === 'e' || e.key === 'E') { if (near) interact(near); return; }
   if ((e.key === 'x' || e.key === 'X') && me.ride) { $('btnRide').click(); return; }
+  if ((e.key === 'q' || e.key === 'Q') && !e.repeat) { throwConfetti(); return; }
   if (e.key === 'v' || e.key === 'V') { setDance(!me.dance); return; }
   if (e.key === 'g' || e.key === 'G') { showSquares = !showSquares; lastArea = ''; return; }
   keys.add(e.key.toLowerCase());
@@ -1166,9 +1345,11 @@ function update(dt, now) {
   }
   if (pending && !me.path.length) { const o = pending; pending = null; if (isBeside(o, i, j)) interact(o); }
   const hint = $('hint');
+  const confettiHint = '<kbd>Q</kbd>Throw confetti';
   if (near && !panel && !me.path.length) { hint.innerHTML = hintFor(near) + (me.ride ? ' &nbsp;·&nbsp; <kbd>X</kbd>Hop off' : ''); hint.style.display = 'block'; }
   else if (me.ride && !panel) { hint.innerHTML = `<kbd>X</kbd>Hop off the ${RIDES[me.ride].name}`; hint.style.display = 'block'; }
-  else if (onDanceFloor(me.x, me.y) && !panel && !me.dance && !me.path.length) { hint.innerHTML = '<kbd>V</kbd>Dance'; hint.style.display = 'block'; }
+  else if (onDanceFloor(me.x, me.y) && !panel && !me.dance && !me.path.length) { hint.innerHTML = `<kbd>V</kbd>Dance &nbsp;·&nbsp; ${confettiHint}`; hint.style.display = 'block'; }
+  else if (!panel && !me.path.length) { hint.innerHTML = confettiHint; hint.style.display = 'block'; }
   else hint.style.display = 'none';
   const area = showSquares ? (hover && hover[0] >= 0 ? `Square ${hover[0]}, ${hover[1]}` : 'Point at the floor') : areaAt(me.x, me.y) + (isShared(zoneOf(me.x, me.y)) ? ' · everyone here can hear you' : '');
   if (area !== lastArea) { lastArea = area; $('where').textContent = area; $('where').style.display = 'block'; }
@@ -1214,6 +1395,60 @@ function bubble(text, x, y) {
   ctx.textAlign = 'left';
 }
 
+// ---------- confetti ----------
+function personPoint(id) {
+  const p = id && players.get(id);
+  if (!p) return null;
+  const sitting = chairOf(p);
+  return scene.screenOf(sitting ? sitting.x + 0.5 : p.x, sitting ? sitting.y + 0.5 : p.y, 1.45);
+}
+function showConfetti({ fromId, toId, fromName, toName }) {
+  const seed = (Date.now() ^ ((confettiThrows.length + 1) * 997)) >>> 0;
+  confettiThrows.push({
+    burst: createBurst({ seed, aimed: !!toId }),
+    fromId, toId, fromName, toName,
+    started: performance.now(),
+  });
+  if (confettiThrows.length > 12) confettiThrows.shift();
+}
+function throwConfetti() {
+  if (!me) return;
+  const now = performance.now();
+  if (!allowThrow(lastConfetti, now)) return;
+  const target = pickConfettiTarget(me, players.values(), spatiallyNear);
+  lastConfetti = now;
+  showConfetti({ fromId: me.id, toId: target?.id || null, fromName: me.name, toName: target?.name || null });
+  send({ t: 'confetti', to: target?.id || null });
+  sound.play('confetti');
+}
+function drawConfetti(now) {
+  for (let i = confettiThrows.length - 1; i >= 0; i--) {
+    const item = confettiThrows[i];
+    const elapsed = (now - item.started) / 1000;
+    if (burstDone(item.burst, elapsed)) { confettiThrows.splice(i, 1); continue; }
+    const from = personPoint(item.fromId);
+    if (!from?.visible) continue;
+    const to = item.toId ? personPoint(item.toId) : null;
+    const aim = to?.visible ? to : from;
+    const bits = placeBurst(item.burst, elapsed);
+    for (const bit of bits) {
+      const x = from.x + (aim.x - from.x) * bit.along + bit.side;
+      const y = from.y + (aim.y - from.y) * bit.along - bit.up;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(bit.spin);
+      ctx.globalAlpha = bit.alpha;
+      ctx.fillStyle = bit.color;
+      ctx.fillRect(-bit.w / 2, -bit.h / 2, bit.w, bit.h);
+      ctx.restore();
+    }
+    if (elapsed < 2.2) {
+      const labelAt = to?.visible ? to : from;
+      pill(confettiCaption(item.fromName, item.toId ? item.toName : null), labelAt.x, labelAt.y - 36, 'rgba(15,12,30,.88)');
+    }
+  }
+}
+
 // Name tags, desk signs and speech bubbles, drawn flat over the 3D view.
 function drawLabels(now, distance) {
   const dpr = devicePixelRatio || 1;
@@ -1257,7 +1492,8 @@ function drawLabels(now, distance) {
     const s = scene.screenOf(sitting ? sitting.x + 0.5 : p.x, sitting ? sitting.y + 0.5 : p.y, 1.72 + (p.ride ? RIDES[p.ride].lift : 0));
     if (!s.visible) continue;
     const tag = p === me ? `${p.name} (you)` : p.name;
-    pill(p.muted && !p.meeting ? `${tag} · muted` : tag, s.x, s.y, p === me ? '#8b5cf6' : 'rgba(15,12,30,.82)');
+    const micNote = p.micDown && !p.meeting ? ' · no mic' : p.muted && !p.meeting ? ' · muted' : '';
+    pill(`${tag}${micNote}`, s.x, s.y, p === me ? '#8b5cf6' : 'rgba(15,12,30,.82)');
     // signs stack upwards over the name: status, then recording, then any speech bubble
     let up = 19;
     if (p.meeting && !atDesk.has(p)) { pill(STATUS[p.status].label, s.x, s.y - up, STATUS[p.status].color); up += 19; }
@@ -1294,6 +1530,7 @@ function draw(now, dt) {
   });
   scene.render({ x: tx, y: ty }, distance, t);
   drawLabels(now, distance);
+  if (me) drawConfetti(now);
 }
 
 let last = performance.now();

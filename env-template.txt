@@ -18,7 +18,7 @@ ANTHROPIC_API_KEY=
 # Leave empty to run without logins on your own computer.
 GOOGLE_CLIENT_ID=
 
-# Only emails at this domain can sign in
+# Suggested sign-in domain, shown on the sign-in screen. Any Google account can sign in.
 ALLOWED_EMAIL_DOMAIN=supremeopti.com
 
 # Optional. Signs login cookies. Leave empty and the server makes one and keeps it
@@ -31,9 +31,15 @@ SESSION_SECRET=
 
 # Slack. Leave these empty and the town still runs: Connect Slack is skipped
 # and nothing is posted. See the Slack section of README.md for the app setup.
-# Bot token (xoxb-) with the chat:write scope. Invite the app to the channel.
+# Bot token (xoxb-) with chat:write and groups:write. groups:write creates the
+# private #supreme-town channel and invites people. Without it, the town logs
+# missing_scope and keeps working; join and leave posts use the channel below.
 SLACK_BOT_TOKEN=
-# Channel id (C...) for join and leave messages. Not the channel name.
+# Optional. Private channel id for join and leave posts. Leave empty and the
+# bot creates (or reuses) a private channel named supreme-town, and saves its
+# id in the data folder. People are invited when they connect Slack or enter.
+# SLACK_TOWN_CHANNEL_ID=
+# Fallback channel id (C...) if the private channel cannot be created.
 SLACK_AM_CHANNEL_ID=
 # From the Slack app's Basic Information page. Used for Connect Slack.
 SLACK_CLIENT_ID=
