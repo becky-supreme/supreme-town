@@ -400,7 +400,7 @@ function leaveCabinets(id) {
     tellCabinet(cab);
   }
 }
-const pub = (p) => ({ id: p.id, name: p.name, look: p.look, x: p.x, y: p.y, f: p.f, status: p.status, muted: p.muted, camOff: p.camOff, item: p.item, ride: p.ride, screen: p.screen, dance: p.dance });
+const pub = (p) => ({ id: p.id, name: p.name, look: p.look, x: p.x, y: p.y, f: p.f, status: p.status, muted: p.muted, camOff: p.camOff, item: p.item, ride: p.ride, screen: p.screen, dance: p.dance, rec: !!p.rec });
 function broadcast(msg, exceptId) {
   const s = JSON.stringify(msg);
   for (const p of players.values()) if (p.id !== exceptId && p.ws.readyState === 1) p.ws.send(s);
@@ -602,7 +602,7 @@ wss.on('connection', (ws, req) => {
         name: (email && users.get(email)?.name) || clean(m.name, 24) || 'Guest',
         look: (email && users.get(email)?.look) || cleanLook(m.look),
         x: sx + 0.5, y: sy + 0.5, f: 'y+', email,
-        status: ['available', 'meeting', 'busy'].includes(m.status) ? m.status : 'available', muted: !!m.muted, camOff: !!m.camOff, item: ITEMS.includes(m.item) ? m.item : null, ride: Object.hasOwn(RIDES, m.ride) ? m.ride : null, screen: null, dance: false, ws,
+        status: ['available', 'meeting', 'busy'].includes(m.status) ? m.status : 'available', muted: !!m.muted, camOff: !!m.camOff, item: ITEMS.includes(m.item) ? m.item : null, ride: Object.hasOwn(RIDES, m.ride) ? m.ride : null, screen: null, dance: false, rec: false, ws,
       };
       ws.send(JSON.stringify({ t: 'init', id: me.id, you: pub(me), players: [...players.values()].map(pub), desks, areaDecor: publicDecorAll() }));
       players.set(me.id, me);
@@ -628,7 +628,8 @@ wss.on('connection', (ws, req) => {
       me.ride = Object.hasOwn(RIDES, m.ride) ? m.ride : null;
       me.screen = typeof m.screen === 'string' && m.screen ? m.screen.slice(0, 80) : null;
       me.dance = !!m.dance;
-      broadcast({ t: 'state', id: me.id, status: me.status, muted: me.muted, camOff: me.camOff, item: me.item, ride: me.ride, screen: me.screen, dance: me.dance }, me.id);
+      me.rec = !!m.rec && me.status === 'available'; // recording a call (saved on their own computer)
+      broadcast({ t: 'state', id: me.id, status: me.status, muted: me.muted, camOff: me.camOff, item: me.item, ride: me.ride, screen: me.screen, dance: me.dance, rec: me.rec }, me.id);
     } else if (m.t === 'poke') {
       // Waving at someone, or inviting them over. Everyone sees a wave; only the
       // person it's for gets told. Nobody can send more than one every 2 seconds,

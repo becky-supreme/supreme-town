@@ -1,5 +1,6 @@
 import { W, H, DESKS, zoneOf, isShared, hearRadius, staticObjects, robot, areaAt, RIDES, CHAIRS, DANCE, onDanceFloor, DECOR_AREAS, decorAreaAt } from './world.js';
 import * as sound from './sound.js';
+import { createRecorder, canRecord } from './recorder.js';
 import { PRESETS, BANK } from './presets.js';
 import { drawBox } from './iso.js';
 import { createScene } from './scene3d.js';
@@ -99,6 +100,49 @@ function findPath(from, isGoal) {
 // ---------- networking ----------
 function send(msg) { if (ws?.readyState === 1) ws.send(JSON.stringify(msg)); }
 const rtc = createRTC({ send: (to, data) => send({ t: 'signal', to, data }), container: $('videos'), screens: $('screens') });
+
+// Recording a call to your own computer (see recorder.js). Everyone you can hear
+// sees a Recording sign over your head and a notice while it's going.
+const recorder = createRecorder({
+  videos: $('videos'),
+  screens: $('screens'),
+  myScreen: () => screenStream,
+  myName: () => me?.name,
+  onChange: (why) => {
+    if (!me) return;
+    if (!!me.rec !== recorder.active()) { me.rec = recorder.active(); sendState(); }
+    applyMedia();
+    if (why === 'time') toast('Recording stopped after 90 minutes and saved to your Downloads. Press Record to carry on.');
+  },
+});
+async function toggleRecording() {
+  if (!me) return;
+  if (recorder.active()) { recorder.stop(); toast('Recording saved to your Downloads.'); return; }
+  if (!canRecord()) return toast("This browser can't record calls. Try Chrome or Edge.");
+  if (me.meeting) return toast('Set yourself to Available to record a call.');
+  if (await recorder.start()) { sound.play('chime'); toast('Recording. Everyone who can hear you sees a Recording sign over your head. Press Stop recording to save it.', [], 8000); }
+  else toast("Couldn't start recording in this browser.");
+}
+$('btnRec').onclick = toggleRecording;
+addEventListener('beforeunload', (e) => { if (recorder.active()) { e.preventDefault(); e.returnValue = ''; } });
+
+// Tell people when someone they're talking to is recording.
+let recSeen = new Set();
+function updateRecNotice() {
+  const others = [...players.values()].filter((p) => p !== me && p.rec && rtc.has(p.id));
+  for (const p of others) {
+    if (recSeen.has(p.id)) continue;
+    toast(`${p.name} is recording. Your voice, camera and any screen you share are in it while you can hear each other.`, [], 9000);
+    sound.play('chime');
+  }
+  recSeen = new Set(others.map((p) => p.id));
+  const parts = [];
+  if (recorder.active()) parts.push(`You're recording · ${recorder.elapsed()}`);
+  if (others.length) parts.push(`${others.map((p) => p.name).join(', ')} ${others.length === 1 ? 'is' : 'are'} recording`);
+  const el = $('recNotice');
+  el.style.display = parts.length ? 'block' : 'none';
+  el.textContent = parts.length ? `● ${parts.join(' · ')}` : '';
+}
 const arcade = createArcade({ send, myId: () => me?.id, sfx: (n) => sound.play(n) });
 window.__hq = { players, rtc, scene, arcade, findPath, get me() { return me; } }; // handy for debugging in the console
 
@@ -130,7 +174,9 @@ function connect(profile) {
       players.clear();
       for (const p of m.players) players.set(p.id, norm({ ...p, tx: p.x, ty: p.y, step: 0 }));
       me = norm({ ...m.you, path: [], step: 0 });
+      me.rec = recorder.active();
       players.set(me.id, me);
+      if (back && me.rec) sendState();
       if (!back) {
         cam.x = me.x; cam.y = me.y;
         introStart = performance.now();
@@ -164,7 +210,7 @@ function connect(profile) {
       if (p) { p.look = m.look; p.name = m.name; }
     } else if (m.t === 'state') {
       const p = players.get(m.id);
-      if (p) norm(Object.assign(p, { status: m.status, muted: m.muted, camOff: m.camOff, item: m.item, ride: m.ride, screen: m.screen, dance: m.dance }));
+      if (p) norm(Object.assign(p, { status: m.status, muted: m.muted, camOff: m.camOff, item: m.item, ride: m.ride, screen: m.screen, dance: m.dance, rec: m.rec }));
     } else if (m.t === 'dm') {
       const thread = dmThreads.get(m.from) || [];
       thread.push({ mine: false, text: m.text });
@@ -270,6 +316,9 @@ function applyMedia() {
   $('btnScreen').disabled = quiet;
   $('btnScreen').textContent = screenStream ? 'Stop sharing' : 'Share screen';
   $('btnScreen').classList.toggle('sharing', !!screenStream);
+  $('btnRec').disabled = quiet && !recorder.active();
+  $('btnRec').textContent = recorder.active() ? `Stop recording ${recorder.elapsed()}` : 'Record';
+  $('btnRec').classList.toggle('recording', recorder.active());
   $('btnRide').hidden = !me.ride;
   $('btnItem').hidden = !me.item;
   $('btnItem').textContent = { coffee: 'Finish coffee', lunch: 'Finish lunch', beer: 'Finish beer', cocktail: 'Finish cocktail', soda: 'Finish drink' }[me.item] || 'Put it down';
@@ -278,7 +327,7 @@ function applyMedia() {
   $('btnSound').textContent = sound.isMuted() ? 'Sound off' : 'Sound on';
   $('btnSound').classList.toggle('off', sound.isMuted());
 }
-function sendState() { send({ t: 'state', status: me.status, muted: me.muted, camOff: me.camOff, item: me.item, ride: me.ride, screen: me.screen || null, dance: !!me.dance }); }
+function sendState() { send({ t: 'state', status: me.status, muted: me.muted, camOff: me.camOff, item: me.item, ride: me.ride, screen: me.screen || null, dance: !!me.dance, rec: recorder.active() }); }
 
 // ---------- dancing, sound and decorating ----------
 function setDance(on) {
@@ -575,6 +624,7 @@ async function setStatus(status) {
   me.status = status;
   norm(me);
   if (!wasQuiet && me.meeting) {
+    if (recorder.active()) { recorder.stop(); toast('Recording saved to your Downloads.'); }
     stopShare();
     // Hang up on everyone and let go of the mic and camera so another call can use them.
     rtc.closeAll();
@@ -1022,7 +1072,7 @@ function update(dt, now) {
   const area = showSquares ? (hover && hover[0] >= 0 ? `Square ${hover[0]}, ${hover[1]}` : 'Point at the floor') : areaAt(me.x, me.y) + (isShared(zoneOf(me.x, me.y)) ? ' · everyone here can hear you' : '');
   if (area !== lastArea) { lastArea = area; $('where').textContent = area; $('where').style.display = 'block'; }
 }
-setInterval(() => { if (me) rtc.update(me, players); }, 250);
+setInterval(() => { if (me) { rtc.update(me, players); updateRecNotice(); } }, 250);
 
 // ---------- drawing ----------
 function resize() {
@@ -1101,10 +1151,12 @@ function drawLabels(now, distance) {
     if (!s.visible) continue;
     const tag = p === me ? `${p.name} (you)` : p.name;
     pill(p.muted && !p.meeting ? `${tag} · muted` : tag, s.x, s.y, p === me ? '#8b5cf6' : 'rgba(15,12,30,.82)');
-    const showStatus = p.meeting && !atDesk.has(p);
-    if (showStatus) pill(STATUS[p.status].label, s.x, s.y - 19, STATUS[p.status].color);
-    if (p.bubble && p.bubble.until > now) bubble(p.bubble.text, s.x, s.y - (showStatus ? 34 : 15));
-    else if (p.emoteUntil && p.emoteUntil > now) bubble('👋', s.x, s.y - (showStatus ? 34 : 15));
+    // signs stack upwards over the name: status, then recording, then any speech bubble
+    let up = 19;
+    if (p.meeting && !atDesk.has(p)) { pill(STATUS[p.status].label, s.x, s.y - up, STATUS[p.status].color); up += 19; }
+    if (p.rec) { pill('● Recording', s.x, s.y - up, '#ef4d5a', '#fff', '700 11px system-ui, sans-serif'); up += 19; }
+    if (p.bubble && p.bubble.until > now) bubble(p.bubble.text, s.x, s.y - up + 4);
+    else if (p.emoteUntil && p.emoteUntil > now) bubble('👋', s.x, s.y - up + 4);
   }
 }
 

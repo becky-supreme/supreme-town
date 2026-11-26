@@ -5,6 +5,7 @@
 - **Arcade:** two cabinets in The Afterworks. Press E to play Lead Volley; you play the computer until someone else joins the same cabinet, then it is 1v1, first to 5.
 - **Paid & Organic:** the team for paid ads, paid social and organic is at the far end of the back wall, past the meeting room. Its receptionist is Juno.
 - **Screen sharing:** click Share screen in the bottom bar. Everyone you are currently talking to sees it; they can click it to make it bigger. Click Stop sharing when done.
+- **Recording a call:** click Record in the bottom bar. It records the voices, cameras and any shared screen of the people you can hear, and saves a video file to your own Downloads when you click Stop recording (or after 90 minutes). Nothing is stored on the town's server. While you record, a red Recording sign shows over your head and everyone you are talking to gets a notice, including anyone who walks up later. Switching to In a meeting or Busy stops and saves the recording. It works best in Chrome or Edge.
 - **Status:** the switch at the bottom sets you to Available, In a meeting, or Busy (do not disturb). In a meeting and Busy both turn off your mic and camera and silence the town for you, without you leaving. Your status shows on a sign over whichever desk you are sitting at.
 - **Desks:** every desk is open. Click a desk to sit at it. Press E at a desk to change how it looks: there are six designs, or you can describe your own, and anyone can change any desk at any time.
 - **Sitting:** walk onto any chair, armchair, bean bag or stool and you sit down.

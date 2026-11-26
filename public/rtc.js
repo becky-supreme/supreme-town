@@ -179,6 +179,7 @@ export function createRTC({ send, container, screens }) {
     setLocalStream(stream) { local = stream; },
     setScreenStream(stream) { screen = stream; },
     count: () => peers.size,
+    has: (id) => peers.has(id),
     states: () => [...peers.entries()].map(([id, p]) => ({ id, state: p.pc.connectionState, streams: p.streams.size, screen: !!p.screenEl })),
   };
 }

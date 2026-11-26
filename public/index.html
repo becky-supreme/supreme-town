@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Supreme Town</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <script type="importmap">{ "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }</script>
 <style>
   :root {
@@ -141,6 +142,8 @@
   .toast .acts button.go { background: var(--accent); border-color: var(--accent); color: #fff; }
   #following { position: fixed; top: 56px; left: 14px; z-index: 6; display: none; background: rgba(15,12,30,.9); border: 1px solid var(--accent); padding: 6px 8px 6px 12px; border-radius: 999px; font-weight: 600; align-items: center; gap: 8px; }
   #following button { background: var(--accent); border: 0; border-radius: 999px; padding: 3px 10px; color: #fff; }
+  #toolbar button.recording { background: var(--danger); border-color: var(--danger); color: #fff; font-variant-numeric: tabular-nums; }
+  #recNotice { position: fixed; top: 12px; right: 14px; z-index: 6; display: none; background: var(--danger); color: #fff; padding: 6px 12px; border-radius: 999px; font-weight: 700; max-width: min(360px, 60vw); box-shadow: 0 4px 18px rgba(239,77,90,.45); }
   #reconnecting { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 25; display: none; background: rgba(15,12,30,.9); border: 1px solid var(--line); padding: 7px 16px; border-radius: 999px; font-weight: 600; }
   #lost { position: fixed; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center; background: rgba(12,10,24,.85); flex-direction: column; gap: 14px; font-size: 16px; }
 
@@ -157,6 +160,7 @@
 <canvas id="stage"></canvas>
 <div id="welcome"><small>You're now in</small><b>SUPREME TOWN</b></div>
 <div id="banner"></div>
+<div id="recNotice" role="status"></div>
 <div id="where"></div>
 <div id="videos"></div>
 <div id="screens"></div>
@@ -171,6 +175,7 @@
   <button id="btnDecor" title="Decorate the area you are in with AI">Decorate</button>
   <button id="btnSound" title="Turn sound effects and music on or off">Sound on</button>
   <button id="btnScreen" title="Show your screen to the people you're talking to">Share screen</button>
+  <button id="btnRec" title="Record the call you are in to a video file on your computer">Record</button>
   <div id="status" role="group" aria-label="Your status">
     <button data-status="available" title="You can talk to people nearby">Available</button>
     <button data-status="meeting" title="On a call somewhere else? This mutes you and silences the office.">In a meeting</button>
