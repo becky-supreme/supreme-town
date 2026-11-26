@@ -37,6 +37,36 @@ const google = CLIENT_ID ? new OAuth2Client(CLIENT_ID) : null;
 
 const sign = (s) => crypto.createHmac('sha256', SECRET).update(s).digest('base64url');
 
+// Used to encrypt Slack user tokens saved in the data folder. Not a token itself.
+export function atRestSecret() {
+  return SECRET;
+}
+
+// A short signed blob (OAuth state, the long-lived device cookie). `exp` is optional.
+export function seal(obj) {
+  const body = Buffer.from(JSON.stringify(obj)).toString('base64url');
+  return `${body}.${sign(body)}`;
+}
+export function unseal(token) {
+  if (typeof token !== 'string') return null;
+  const dot = token.lastIndexOf('.');
+  if (dot <= 0) return null;
+  const body = token.slice(0, dot);
+  const mac = token.slice(dot + 1);
+  const good = sign(body);
+  const a = Buffer.from(mac);
+  const b = Buffer.from(good);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try {
+    const obj = JSON.parse(Buffer.from(body, 'base64url').toString());
+    if (!obj || typeof obj !== 'object') return null;
+    if (obj.exp != null && Number(obj.exp) < Date.now()) return null;
+    return obj;
+  } catch {
+    return null;
+  }
+}
+
 // Checks the token Google hands the browser and returns the person's email and name.
 export async function verifyGoogle(credential) {
   const ticket = await google.verifyIdToken({ idToken: String(credential || ''), audience: CLIENT_ID });

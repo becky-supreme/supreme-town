@@ -13,7 +13,8 @@ import { DESKS, SPAWNS, W, H, ITEMS, RIDES, staticObjects, zoneOf, isShared, hea
 import { PRESETS, BANK, presetFromPrompt, sanitiseDesign } from './public/presets.js';
 import { cleanLook, avatarBoxes, sanitiseCharacter } from './public/avatar.js';
 import { hasNotion, readBotSources, pickSections, friendlyNotionError } from './notion.js';
-import { CLIENT_ID, DOMAIN, authRequired, secretIsTemporary, verifyGoogle, sessionCookie, clearCookie, emailFromRequest, createUserStore } from './auth.js';
+import { CLIENT_ID, DOMAIN, authRequired, secretIsTemporary, verifyGoogle, sessionCookie, clearCookie, emailFromRequest, createUserStore, atRestSecret, seal, unseal } from './auth.js';
+import { createSlack, identityFor, presenceKey, readDeviceId, deviceSetCookie } from './slack.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3210);
@@ -360,7 +361,9 @@ function saveLastSeen() {
   try { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(LAST_SEEN_FILE, JSON.stringify(Object.fromEntries(lastSeen))); } catch { /* not vital */ }
 }
 setInterval(saveLastSeen, 20_000).unref();
-for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { saveLastSeen(); process.exit(0); });
+// Slack hooks this so a redeploy does not announce that everyone left.
+let onShutdown = () => {};
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { saveLastSeen(); onShutdown(); process.exit(0); });
 const MAX_SPEED = 14; // squares a second: a little over a go-kart
 function moveAllowed(p, x, y) {
   if (!(x >= 0 && x < W && y >= 0 && y < H) || solidTiles.has(`${Math.floor(x)},${Math.floor(y)}`)) return false;
@@ -415,6 +418,70 @@ function broadcast(msg, exceptId) {
 const clean = (s, n) => String(s ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, n);
 const hex = (s, fallback) => (/^#[0-9a-fA-F]{6}$/.test(s) ? s : fallback);
 const users = createUserStore(DATA);
+const slack = createSlack({ dataDir: DATA, secret: atRestSecret(), seal, unseal });
+onShutdown = () => slack.pauseForRestart();
+// Who is connected, so a dead Slack token can close every tab that person has open.
+const slackSockets = new Map();
+function trackSlackSocket(identity, ws) {
+  if (!identity) return;
+  let set = slackSockets.get(identity);
+  if (!set) slackSockets.set(identity, set = new Set());
+  set.add(ws);
+  ws.on('close', () => { set.delete(ws); if (!set.size) slackSockets.delete(identity); });
+}
+function dropSlack(identity) {
+  for (const sock of slackSockets.get(identity) || []) {
+    if (sock.readyState === 1) sock.close(4403, 'Connect Slack');
+  }
+}
+function slackIdentity(req) {
+  // Signed-in people are their email on every browser. Otherwise a long-lived
+  // device cookie, set the first time they connect Slack, is the identity.
+  if (authRequired()) return identityFor({ email: emailFromRequest(req) });
+  return identityFor({ deviceId: readDeviceId(req.headers.cookie || '', unseal) });
+}
+function secureRequest(req) {
+  return req.headers['x-forwarded-proto'] === 'https';
+}
+async function handleSlack(req, res, url) {
+  if (url.pathname === '/api/slack' && req.method === 'GET') {
+    json(res, 200, await slack.doorState(slackIdentity(req)));
+    return true;
+  }
+  if (url.pathname === '/api/slack/connect' && req.method === 'GET') {
+    if (!slack.gateRequired()) { res.writeHead(302, { location: '/' }); res.end(); return true; }
+    if (authRequired() && !emailFromRequest(req)) { res.writeHead(302, { location: '/' }); res.end(); return true; }
+    let identity = slackIdentity(req);
+    const headers = {};
+    if (!identity) {
+      const did = crypto.randomUUID();
+      headers['set-cookie'] = deviceSetCookie(did, seal, secureRequest(req));
+      identity = identityFor({ deviceId: did });
+    }
+    const dest = slack.authorizeUrl(identity);
+    if (!dest) { res.writeHead(302, { location: '/?slack=error', ...headers }); res.end(); return true; }
+    res.writeHead(302, { ...headers, location: dest });
+    res.end();
+    return true;
+  }
+  if (url.pathname === '/api/slack/callback' && req.method === 'GET') {
+    const err = url.searchParams.get('error');
+    if (err) {
+      res.writeHead(302, { location: err === 'access_denied' ? '/?slack=denied' : '/?slack=error' });
+      res.end();
+      return true;
+    }
+    const result = await slack.finishConnect({
+      code: url.searchParams.get('code') || '',
+      state: url.searchParams.get('state') || '',
+      identity: slackIdentity(req),
+    });
+    res.writeHead(302, { location: result.ok ? '/?slack=connected' : '/?slack=error' });
+    res.end();
+    return true;
+  }
+  return false;
+}
 
 // ---------- http ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
@@ -456,6 +523,9 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/logout' && req.method === 'POST') {
       res.setHeader('set-cookie', clearCookie);
       return json(res, 200, { ok: true });
+    }
+    if (url.pathname === '/api/slack' || url.pathname.startsWith('/api/slack/')) {
+      if (await handleSlack(req, res, url)) return;
     }
     if (url.pathname.startsWith('/api/') && authRequired() && !email) return json(res, 401, { error: 'Sign in first.' });
     if (url.pathname === '/api/profile' && req.method === 'POST') {
@@ -617,29 +687,53 @@ const wss = new WebSocketServer({ server, maxPayload: 100_000 });
 // (a character the AI designed is the biggest message: about 60 boxes, well under this limit)
 wss.on('connection', (ws, req) => {
   let me = null;
+  let alive = true;
+  let joining = false;
   const email = authRequired() ? emailFromRequest(req) : null;
   if (authRequired() && !email) return ws.close(4401, 'Sign in first');
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
   ws.on('message', (raw) => {
     let m;
     try { m = JSON.parse(raw); } catch { return; }
     if (m.t === 'join' && !me) {
-      let [sx, sy] = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
-      // Coming back after a dropped connection: carry on from where the server last
-      // had you, if that was in the last few minutes. The browser's own idea of where
-      // it is isn't trusted, so nobody can reconnect their way into a room.
-      const was = email && lastSeen.get(email);
-      if (was && Date.now() - was.at < 5 * 60_000 && !solidTiles.has(`${Math.floor(was.x)},${Math.floor(was.y)}`)) { sx = Math.floor(was.x); sy = Math.floor(was.y); }
-      me = {
-        id: crypto.randomBytes(5).toString('hex'),
-        // signed-in people use their saved character; otherwise whatever the browser sent
-        name: (email && users.get(email)?.name) || clean(m.name, 24) || 'Guest',
-        look: (email && users.get(email)?.look) || cleanLook(m.look),
-        x: sx + 0.5, y: sy + 0.5, f: 'y+', email,
-        status: ['available', 'meeting', 'busy'].includes(m.status) ? m.status : 'available', muted: !!m.muted, camOff: !!m.camOff, item: ITEMS.includes(m.item) ? m.item : null, ride: Object.hasOwn(RIDES, m.ride) ? m.ride : null, screen: null, dance: false, rec: false, ws,
-      };
-      ws.send(JSON.stringify({ t: 'init', id: me.id, you: pub(me), players: [...players.values()].map(pub), desks, items: publicItems() }));
-      players.set(me.id, me);
-      broadcast({ t: 'join', player: pub(me) }, me.id);
+      if (joining) return;
+      joining = true;
+      void (async () => {
+        try {
+          const who = slackIdentity(req);
+          const gate = await slack.admit(who);
+          if (!alive || ws.readyState !== 1) return;
+          if (!gate.ok) return ws.close(4403, 'Connect Slack');
+          let [sx, sy] = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
+          // Coming back after a dropped connection: carry on from where the server last
+          // had you, if that was in the last few minutes. The browser's own idea of where
+          // it is isn't trusted, so nobody can reconnect their way into a room.
+          const was = email && lastSeen.get(email);
+          if (was && Date.now() - was.at < 5 * 60_000 && !solidTiles.has(`${Math.floor(was.x)},${Math.floor(was.y)}`)) { sx = Math.floor(was.x); sy = Math.floor(was.y); }
+          const name = (email && users.get(email)?.name) || clean(m.name, 24) || 'Guest';
+          me = {
+            id: crypto.randomBytes(5).toString('hex'),
+            // signed-in people use their saved character; otherwise whatever the browser sent
+            name,
+            look: (email && users.get(email)?.look) || cleanLook(m.look),
+            x: sx + 0.5, y: sy + 0.5, f: 'y+', email,
+            status: ['available', 'meeting', 'busy'].includes(m.status) ? m.status : 'available', muted: !!m.muted, camOff: !!m.camOff, item: ITEMS.includes(m.item) ? m.item : null, ride: Object.hasOwn(RIDES, m.ride) ? m.ride : null, screen: null, dance: false, rec: false, ws,
+            slackIdentity: presenceKey(who, name),
+          };
+          if (!alive || ws.readyState !== 1) { me = null; return; }
+          ws.send(JSON.stringify({ t: 'init', id: me.id, you: pub(me), players: [...players.values()].map(pub), desks, items: publicItems() }));
+          players.set(me.id, me);
+          broadcast({ t: 'join', player: pub(me) }, me.id);
+          trackSlackSocket(me.slackIdentity, ws);
+          // The town is already open for them. Status and the channel post follow.
+          void slack.arrived({ identity: me.slackIdentity, name: me.name, onDead: () => dropSlack(me.slackIdentity) })
+            .catch((err) => console.error('slack arrival failed:', err && err.message ? err.message : 'error'));
+        } catch (err) {
+          console.error('join failed:', err && err.message ? err.message : 'error');
+          if (alive && ws.readyState === 1) ws.close(1011, 'Try again');
+        }
+      })();
       return;
     }
     if (!me) return;
@@ -715,13 +809,27 @@ wss.on('connection', (ws, req) => {
     }
   });
   ws.on('close', () => {
+    alive = false;
     if (!me) return;
-    leaveCabinets(me.id);
-    if (email) lastSeen.set(email, { x: me.x, y: me.y, at: Date.now() });
-    players.delete(me.id);
-    broadcast({ t: 'leave', id: me.id });
+    const gone = me;
+    me = null;
+    leaveCabinets(gone.id);
+    if (email) lastSeen.set(email, { x: gone.x, y: gone.y, at: Date.now() });
+    players.delete(gone.id);
+    broadcast({ t: 'leave', id: gone.id });
+    slack.left({ identity: gone.slackIdentity, name: gone.name });
   });
 });
+// A socket that stops answering is the "timed out" case: drop it, then the
+// grace period says they left and clears the Slack status if it is still ours.
+const beat = setInterval(() => {
+  for (const client of wss.clients) {
+    if (client.isAlive === false) { client.terminate(); continue; }
+    client.isAlive = false;
+    try { client.ping(); } catch { /* already closing */ }
+  }
+}, 30_000);
+beat.unref();
 
 rebuildSolid();
 server.listen(PORT, () => {
@@ -729,6 +837,10 @@ server.listen(PORT, () => {
   console.log(useOpenRouter() ? `AI features on through OpenRouter (${OPENROUTER_MODEL}).` : hasAI() ? `AI features on (${MODEL}).` : 'No AI key found: desks use the six designs and the bots are asleep. See README.md.');
   console.log(authRequired() ? `Sign-in on: Google accounts at @${DOMAIN} only.` : 'No GOOGLE_CLIENT_ID set: running without logins. Fine on your own computer, not for a shared link.');
   if (authRequired() && secretIsTemporary) console.log('Could not save a session secret to the data folder: everyone is signed out whenever the server restarts.');
+  const slackNote = slack.warning();
+  if (slackNote) console.warn(slackNote);
+  else console.log('Slack is on: people connect once, their status shows they are here, and the account managers\' channel hears arrivals and departures.');
+  if (slack.gateRequired() && secretIsTemporary) console.warn('The session secret could not be saved, so Slack connections will not survive a restart.');
   const usesNotion = readBotConfig().some((b) => b.notion?.length);
   if (hasNotion()) {
     const minutes = Math.max(5, Number(process.env.NOTION_SYNC_MINUTES || 30));

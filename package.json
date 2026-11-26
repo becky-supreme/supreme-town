@@ -6,7 +6,8 @@
   "description": "Supreme Town: Supreme Optimization's 3D virtual office.",
   "scripts": {
     "start": "node --env-file-if-exists=.env server.js",
-    "check": "node scripts/check-map.mjs"
+    "check": "node scripts/check-map.mjs",
+    "test": "node --test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.14.0",
