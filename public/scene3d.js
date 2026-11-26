@@ -1,15 +1,16 @@
 // Supreme Town in 3D. Everything in the town is still described as coloured
 // boxes (world.js, presets.js, avatar.js); this file turns them into a lit 3D
-// scene with shadows and neon glow, and adds the decor.
+// scene with shadows and bright neon colours, and adds the decor. It is kept
+// light on purpose (no glow filter, no extra lamps, no floating sparkles) so it
+// runs smoothly on ordinary laptops and big screens.
 // Town coordinates (x, y, height) map to 3D as (x, height, y).
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPixelatedPass } from 'three/addons/postprocessing/RenderPixelatedPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { W, H, floorColor, FLOOR_LABELS, WALL_SIGNS, TEAMS, CHAIRS, chairBoxes, vehicleBoxes, RIDES, SIT, HEAR_RADIUS } from './world.js';
 import { avatarBoxes } from './avatar.js';
 import { drawPoster, POSTERS } from './decor.js';
@@ -19,9 +20,10 @@ const CAM_DIR = new THREE.Vector3(1, 1.02, 1).normalize();
 
 export function createScene(glCanvas) {
   const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+  // Retina screens have 4x the pixels; 1.25x still looks sharp and is far quicker to draw.
+  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.25));
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0.92;
 
@@ -31,7 +33,7 @@ export function createScene(glCanvas) {
   const camera = new THREE.PerspectiveCamera(30, 1, 0.5, 400);
 
   // ---------- light ----------
-  const hemi = new THREE.HemisphereLight('#cfd8ff', '#3a2f55', 1.15);
+  const hemi = new THREE.HemisphereLight('#cfd8ff', '#3a2f55', 1.3);
   scene.add(hemi);
   const glowLights = [];
   const sun = new THREE.DirectionalLight('#fff1dc', 2.2);
@@ -42,7 +44,12 @@ export function createScene(glCanvas) {
   for (const k of ['right', 'top']) sun.shadow.camera[k] = 30;
   sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
   scene.add(sun, sun.target);
-  const glowLight = (color, x, y, z, power, reach) => { const l = new THREE.PointLight(color, power, reach, 1.6); l.position.set(x, z, y); l.userData.power = power; scene.add(l); glowLights.push(l); return l; };
+  // Coloured lamps used to light the bar, lounge, globe and dance floor. Each one
+  // is worked out for every pixel of every surface, so they're switched off to keep
+  // things quick; the neon colours themselves stay.
+  const LAMPS = false;
+  const glowLight = (color, x, y, z, power, reach) => {
+    if (!LAMPS) return null; const l = new THREE.PointLight(color, power, reach, 1.6); l.position.set(x, z, y); l.userData.power = power; scene.add(l); glowLights.push(l); return l; };
   glowLight('#ff3df2', 37, 31.5, 2.2, 60, 16); // the bar
   glowLight('#27e0ff', 37, 38, 2.4, 40, 14);
   glowLight('#ffd9a0', 6, 33, 2.6, 45, 14); // lounge lamps
@@ -73,7 +80,7 @@ export function createScene(glCanvas) {
         scl.set(b.w, b.h, b.d);
         mesh.setMatrixAt(n, mtx.compose(pos, quat, scl));
         col.set(b.color);
-        if (kind === 'glow') col.multiplyScalar(2.4);
+        if (kind === 'glow') col.multiplyScalar(1.35);
         mesh.setColorAt(n, col);
       });
       mesh.castShadow = kind === 'solid';
@@ -295,8 +302,8 @@ export function createScene(glCanvas) {
     }
   }
 
-  // happy little lights drifting up through the air
-  const motes = (() => {
+  // (the floating sparkles were removed to keep things quick)
+  const motes = false && (() => {
     const n = 420, p = new Float32Array(n * 3), c = new Float32Array(n * 3);
     const palette = ['#ff3df2', '#27e0ff', '#ffd24a', '#39ff9c', '#b79bff'].map((x) => new THREE.Color(x));
     for (let i = 0; i < n; i++) {
@@ -337,7 +344,7 @@ export function createScene(glCanvas) {
     const key = (b.glow ? 'g' : 's') + b.color;
     let m = matCache.get(key);
     if (!m) {
-      m = b.glow ? new THREE.MeshBasicMaterial({ color: new THREE.Color(b.color).multiplyScalar(2.4), toneMapped: false })
+      m = b.glow ? new THREE.MeshBasicMaterial({ color: new THREE.Color(b.color).multiplyScalar(1.35), toneMapped: false })
         : new THREE.MeshStandardMaterial({ color: b.color, roughness: 0.7 });
       matCache.set(key, m);
     }
@@ -349,15 +356,26 @@ export function createScene(glCanvas) {
     const lift = p.ride ? RIDES[p.ride].lift : 0;
     const boxes = avatarBoxes(p.look, 'y+', 0, p.item, chair ? SIT[chair.type] : null, true).map((b) => ({ ...b, z: b.z + lift }));
     if (p.ride) boxes.push(...vehicleBoxes(p.ride, 'y'));
+    // Boxes of the same colour are joined into one shape, so a person is a handful
+    // of draw calls rather than dozens.
+    const byMat = new Map();
     for (const b of boxes) {
-      const mesh = new THREE.Mesh(cube, matFor(b));
-      mesh.position.set(b.x + b.w / 2, b.z + b.h / 2, b.y + b.d / 2);
-      mesh.scale.set(b.w, b.h, b.d);
-      mesh.castShadow = !b.glow;
+      const g = cube.clone();
+      g.scale(b.w, b.h, b.d);
+      g.translate(b.x + b.w / 2, b.z + b.h / 2, b.y + b.d / 2);
+      const m = matFor(b);
+      if (!byMat.has(m)) byMat.set(m, []);
+      byMat.get(m).push(g);
+    }
+    for (const [m, list] of byMat) {
+      const mesh = new THREE.Mesh(list.length === 1 ? list[0] : mergeGeometries(list), m);
+      if (list.length > 1) for (const g of list) g.dispose();
+      mesh.castShadow = !m.isMeshBasicMaterial;
       group.add(mesh);
     }
     return group;
   }
+  function dropPerson(e) { scene.remove(e.group); e.group.traverse((o) => { if (o.isMesh) o.geometry.dispose(); }); }
   // players: iterable of people. chairOf(p) says which chair they are sitting in, if any.
   function syncPeople(players, chairOf, dt, time) {
     const seen = new Set();
@@ -368,7 +386,7 @@ export function createScene(glCanvas) {
       const key = JSON.stringify([p.look, p.item, p.ride, chair?.type, p.meeting]);
       let e = people.get(p.id);
       if (!e || e.key !== key) {
-        if (e) scene.remove(e.group);
+        if (e) dropPerson(e);
         e = { group: buildPerson(p, chair), key, angle: e?.angle ?? ANGLE[p.f] ?? 0 };
         scene.add(e.group);
         people.set(p.id, e);
@@ -400,15 +418,10 @@ export function createScene(glCanvas) {
       e.group.rotation.z = lean;
       e.group.rotation.x = tilt;
     }
-    for (const [id, e] of people) if (!seen.has(id)) { scene.remove(e.group); people.delete(id); }
+    for (const [id, e] of people) if (!seen.has(id)) { dropPerson(e); people.delete(id); }
   }
 
   // ---------- camera, picking and drawing ----------
-  const composer = new EffectComposer(renderer);
-  composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.5, 0.6, 1.0);
-  composer.addPass(bloom);
-  composer.addPass(new OutputPass());
 
   // The 8-bit look, in the spirit of classic top-down pixel games: seen straight
   // on from the front, crisp big pixels, dark outlines, flat bright colour.
@@ -418,7 +431,10 @@ export function createScene(glCanvas) {
   const ELEV = 0.96; // how steeply the 8-bit camera looks down (about 55 degrees)
   const RETRO_DIR = new THREE.Vector3(0, Math.sin(ELEV), Math.cos(ELEV));
   const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.5, 400);
-  const retro = new EffectComposer(renderer);
+  let retro = null;
+  const retroComposer = () => {
+  if (retro) return retro;
+  retro = new EffectComposer(renderer);
   retro.addPass(new RenderPixelatedPass(PIXEL * renderer.getPixelRatio(), scene, orthoCam, { normalEdgeStrength: 0.25, depthEdgeStrength: 0.9 }));
   retro.addPass(new OutputPass());
   retro.addPass(new ShaderPass({ // a smaller, flatter set of colours
@@ -431,11 +447,13 @@ export function createScene(glCanvas) {
         gl_FragColor = vec4(floor(c * levels + 0.5) / levels, 1.0);
       }`,
   }));
+  retro.setSize(cw, ch);
+  return retro;
+  };
   let lookName = 'modern';
   function setLook(name) {
     lookName = name === '8bit' ? '8bit' : 'modern';
     const r = lookName === '8bit';
-    motes.visible = !r;
     scene.background.set(r ? '#6dbb5e' : '#120f26'); // grass outside, instead of night sky
     scene.fog.near = r ? 1e5 : 70; scene.fog.far = r ? 1e6 : 190;
     hemi.intensity = r ? 2.3 : 1.15;
@@ -453,8 +471,7 @@ export function createScene(glCanvas) {
   function resize() {
     cw = innerWidth; ch = innerHeight;
     renderer.setSize(cw, ch, false);
-    composer.setSize(cw, ch);
-    retro.setSize(cw, ch);
+    retro?.setSize(cw, ch);
     camera.aspect = cw / ch;
     camera.updateProjectionMatrix();
   }
@@ -485,10 +502,8 @@ export function createScene(glCanvas) {
       else if (s.axis === 'z') s.o.rotation.z = time * s.speed;
       else s.o.rotation.y = time * s.speed;
     }
-    const arr = motes.geometry.attributes.position.array;
-    for (let i = 1; i < arr.length; i += 3) { arr[i] += 0.004 + (i % 7) * 0.0006; if (arr[i] > 9) arr[i] = 0; }
-    motes.geometry.attributes.position.needsUpdate = true;
-    (lookName === '8bit' ? retro : composer).render();
+    if (lookName === '8bit') retroComposer().render();
+    else renderer.render(scene, camera); // straight to the screen: no glow filter
   }
   // Where a point in the town lands on screen.
   function screenOf(x, y, z) {
@@ -525,6 +540,14 @@ export function createScene(glCanvas) {
     return best;
   }
 
+  // ---------- things people have added with Decorate ----------
+  let itemsGroup = null;
+  function setItems(items) {
+    if (itemsGroup) { scene.remove(itemsGroup); clearGroup(itemsGroup); }
+    itemsGroup = boxGroup(items.flatMap((it) => it.boxes.map((b) => ({ ...b, x: b.x + it.x, y: b.y + it.y }))));
+    scene.add(itemsGroup);
+  }
+
   // ---------- area decorations (made by the AI decorator) ----------
   const areaDecor = new Map(); // area id -> { boxes, tint, sign }
   function setAreaDecor(area, decor) {
@@ -552,5 +575,5 @@ export function createScene(glCanvas) {
     areaDecor.set(area.id, entry);
   }
 
-  return { setStatic, setDesks, addDecor, syncPeople, setMarkers, render, screenOf, groundAt, pick, setLook, setAreaDecor };
+  return { setStatic, setDesks, addDecor, syncPeople, setMarkers, render, screenOf, groundAt, pick, setLook, setAreaDecor, setItems };
 }

@@ -120,6 +120,11 @@
   #join p { margin: 0; color: var(--muted); }
   #join input[type=text] { background: #15122a; border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; font-size: 16px; }
   .ai-look { display: flex; gap: 8px; }
+  #panel select, #panel input.field { width: 100%; background: #15122a; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: inherit; color: inherit; }
+  .thing { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+  .thing span { flex: 1; min-width: 0; }
+  .thing small { color: var(--muted); display: block; }
+  .thing button { border: 1px solid var(--line); background: #2d2752; border-radius: 8px; padding: 5px 10px; font-size: 13px; }
   .hint-note { color: var(--muted); font-size: 12px; margin: 0; }
   .ai-look input { flex: 1; min-width: 0; background: #15122a; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
   #join .status { margin: 0; font-size: 13px; }
@@ -172,7 +177,7 @@
   <button id="btnCam" title="Turn your camera on or off">Camera on</button>
   <button id="btnLook" title="Change your character">Change look</button>
   <button id="btnDance" title="Dance (or press V)">Dance</button>
-  <button id="btnDecor" title="Decorate the area you are in with AI">Decorate</button>
+  <button id="btnDecor" title="Add something to the town with AI, like a birthday cake">Decorate</button>
   <button id="btnSound" title="Turn sound effects and music on or off">Sound on</button>
   <button id="btnScreen" title="Show your screen to the people you're talking to">Share screen</button>
   <button id="btnRec" title="Record the call you are in to a video file on your computer">Record</button>

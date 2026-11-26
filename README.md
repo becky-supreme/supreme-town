@@ -93,7 +93,7 @@ Two cabinets in The Afterworks run Lead Volley, a 1v1 paddle game. The first per
 - **Who's here:** the "here" button lists everyone, with private messages, go to, follow, wave and invite. Private messages go only to the other person and aren't saved.
 - **Wave, invite over, follow:** click another person for the menu. Waves and invites aren't delivered to people set to In a meeting or Busy, and each person can send one every 2 seconds.
 - **Sound:** made in the browser in `public/sound.js` (no audio files), including an original loop for the dance floor. The Sound button mutes it.
-- **Decorate:** the Decorate button lets anyone ask the AI to dress the shared space they're standing in. Decorations are visual only (they never block anyone), are saved in the data folder, and reset after 24 hours. The areas are listed in `DECOR_AREAS` in `public/world.js`.
+- **Decorate:** anyone can describe one thing ("a birthday cake") and the AI builds it on a single free square next to them, or in an area they pick from `DECOR_AREAS` in `public/world.js`. Things never block anyone, are saved in the data folder (`decor-items.json`), can be taken away by anyone, and disappear after 24 hours. At most 10 per area and 60 in the whole town.
 
 ## Change the town
 
@@ -131,3 +131,7 @@ This follows the same pattern as Vista: push to GitHub, and Railway redeploys wh
 - Calls go directly between browsers. That is fine for a handful of people standing together; a big all-hands in one spot would need a media server (LiveKit is the usual choice).
 - Some company networks block direct calls. Fixing that needs a relay (TURN) server.
 - Set `GOOGLE_CLIENT_ID` before sharing the link, or anyone with it can walk in.
+
+## Keeping it quick
+
+The 3D view is kept light so it runs smoothly on ordinary laptops and big screens: no glow filter, no coloured lamps, no floating sparkles, drawing capped at 1.25x pixel density and 60 frames a second, and each person drawn as a handful of shapes rather than dozens. Shadows stay. The settings are at the top of `public/scene3d.js` (pixel density, shadows, and `LAMPS` for the coloured lamps) and `MIN_FRAME` in `public/main.js`.
