@@ -170,7 +170,8 @@ function connect(profile) {
       reconnectTries = 0;
       $('reconnecting').style.display = 'none';
       desks = m.desks;
-      for (const a of DECOR_AREAS) scene.setAreaDecor(a, m.areaDecor?.[a.id] || null);
+      townItems = m.items || [];
+      scene.setItems(townItems);
       players.clear();
       for (const p of m.players) players.set(p.id, norm({ ...p, tx: p.x, ty: p.y, step: 0 }));
       me = norm({ ...m.you, path: [], step: 0 });
@@ -250,11 +251,11 @@ function connect(profile) {
       arcade.handle(m);
     } else if (m.t === 'signal') {
       rtc.handleSignal(m.from, m.data, me, players).catch((err) => console.warn('call set-up failed', err));
-    } else if (m.t === 'area') {
-      const a = DECOR_AREAS.find((x) => x.id === m.areaId);
-      if (a) scene.setAreaDecor(a, m.decor);
-      if (a && m.decor) { logChat(null, `${a.name} has been decorated: ${m.decor.name}`); sound.play('magic'); }
-      if (panel?.kind === 'decor' && panel.area.id === m.areaId) { panel.current = m.decor; renderDecorPanel(); }
+    } else if (m.t === 'items') {
+      townItems = m.items || [];
+      scene.setItems(townItems);
+      if (m.added) { logChat(null, `${m.added.who} added ${m.added.name.toLowerCase().startsWith('a ') ? '' : 'a '}${m.added.name}${m.added.where ? ` in ${m.added.where}` : ''}`); sound.play('magic'); }
+      if (panel?.kind === 'decor') renderDecorPanel();
     } else if (m.t === 'desk') {
       desks[m.deskId] = m.desk;
       rebuildObjects();
@@ -539,48 +540,78 @@ function toast(text, actions = [], ms = 6000) {
 $('btnSound').onclick = () => { sound.setMuted(!sound.isMuted()); if (me) applyMedia(); };
 $('btnDecor').onclick = () => openDecor();
 
+// Decorate: describe one thing and the AI makes it and puts it next to you, or
+// somewhere in an area you pick. It doesn't change the room, and anyone can take
+// things away again. Everything disappears by itself after a day.
+let townItems = []; // [{ id, name, x, y, boxes, at }]
 function openDecor() {
   if (!me) return;
-  const area = decorAreaAt(me.x, me.y);
-  panel = { kind: 'decor', area, status: '', err: false, current: null };
-  openPanel(area ? `Decorate: ${area.name}` : 'Decorate', 'Describe it and the AI dresses the whole area', '#ff3df2');
+  panel = { kind: 'decor', status: '', err: false };
+  openPanel('Add something', 'Describe one thing and the AI makes it', '#ff3df2');
   $('panelFoot').innerHTML = '';
-  if (area) fetch('/api/config').then(() => {}); // keeps the session fresh
   renderDecorPanel();
+  $('itemPrompt')?.focus();
 }
 function renderDecorPanel() {
+  if (panel?.kind !== 'decor') return;
   const body = $('panelBody');
-  const { area } = panel;
-  if (!area) {
-    body.innerHTML = '<div>Walk into a shared space (the lounge, the bar, the lunch area, the kitchen, the meeting room, the entrance or a team area), then press Decorate again.</div>';
-    return;
-  }
-  const draft = $('decorPrompt')?.value ?? '';
+  const draft = $('itemPrompt')?.value ?? '';
+  const where = $('itemWhere')?.value ?? '';
   body.innerHTML = `
-    <div class="label">Describe the decorations</div>
-    <textarea id="decorPrompt" maxlength="300" placeholder="It's Sam's birthday: balloons, bunting and a big HAPPY BIRTHDAY SAM sign"></textarea>
-    <button class="primary" id="decorGo">Decorate it</button>
-    <div class="hint-note">AI designs can take anywhere from a few seconds to a couple of minutes. Everyone sees the result, and the area goes back to normal by itself after a day.</div>
-    <div class="status ${panel.err ? 'err' : ''}" id="decorStatus"></div>
-    <button class="link" id="decorReset">Put this area back to normal now</button>`;
-  $('decorStatus').textContent = panel.status;
-  $('decorPrompt').value = draft;
-  $('decorGo').disabled = !!panel.busy;
-  $('decorGo').onclick = () => submitDecor({ prompt: $('decorPrompt').value });
-  $('decorReset').onclick = () => submitDecor({ reset: true });
+    <div class="label">What do you want to add?</div>
+    <input class="field" id="itemPrompt" maxlength="200" placeholder="A birthday cake with candles" autocomplete="off">
+    <div class="label">Where</div>
+    <select id="itemWhere"><option value="">Right next to me</option></select>
+    <button class="primary" id="itemGo">Add it</button>
+    <div class="hint-note">The AI can take from a few seconds to a couple of minutes. Everyone sees it, anyone can take it away, and it disappears by itself after a day.</div>
+    <div class="status ${panel.err ? 'err' : ''}" id="itemStatus"></div>
+    <div class="label" id="nearLabel">Things near you</div>
+    <div id="nearList" style="display:flex;flex-direction:column;gap:6px"></div>`;
+  for (const a of DECOR_AREAS) { const o = document.createElement('option'); o.value = a.id; o.textContent = `Somewhere in ${a.name}`; $('itemWhere').append(o); }
+  $('itemPrompt').value = draft;
+  $('itemWhere').value = where;
+  $('itemStatus').textContent = panel.status;
+  $('itemGo').disabled = !!panel.busy;
+  $('itemGo').onclick = () => submitItem();
+  $('itemPrompt').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitItem(); });
+  // things within a few steps, nearest first, each with a way to take it away
+  const near = townItems
+    .map((it) => ({ it, d: Math.hypot(it.x + 0.5 - me.x, it.y + 0.5 - me.y) }))
+    .filter((n) => n.d < 9).sort((x, y) => x.d - y.d);
+  $('nearLabel').hidden = !near.length;
+  for (const { it } of near) {
+    const row = document.createElement('div'); row.className = 'thing';
+    const name = document.createElement('span'); name.textContent = it.name;
+    const when = document.createElement('small'); when.textContent = `Added ${agoText(it.at)}`;
+    name.append(when);
+    const btn = document.createElement('button'); btn.textContent = 'Take away';
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try { await fetch('/api/item/remove', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: it.id }) }); } catch { btn.disabled = false; }
+    };
+    row.append(name, btn);
+    $('nearList').append(row);
+  }
 }
-async function submitDecor(payload) {
-  if (panel?.kind !== 'decor' || panel.busy || !panel.area) return;
+function agoText(t) {
+  const m = Math.round((Date.now() - t) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`;
+}
+async function submitItem() {
+  if (panel?.kind !== 'decor' || panel.busy) return;
   const mine = panel;
-  if (payload.prompt !== undefined && !payload.prompt.trim()) { mine.status = 'Describe the decorations first.'; mine.err = true; return renderDecorPanel(); }
+  const prompt = $('itemPrompt').value.trim();
+  const areaId = $('itemWhere').value || null;
+  if (!prompt) { mine.status = 'Say what you want to add first.'; mine.err = true; return renderDecorPanel(); }
   mine.busy = true; mine.err = false;
-  mine.status = payload.reset ? 'Tidying up…' : 'Decorating… this can take a few seconds or a couple of minutes, so hang tight.';
+  mine.status = 'Making it… this can take a few seconds or a couple of minutes, so hang tight.';
   renderDecorPanel();
   try {
-    const r = await fetch('/api/area', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ areaId: mine.area.id, ...payload }) });
+    const r = await fetch('/api/item', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, areaId, at: [me.x, me.y, me.f] }) });
     const data = await r.json();
     mine.err = !!data.error;
-    mine.status = data.error || (payload.reset ? 'Back to normal.' : `Done: ${data.name}.`);
+    mine.status = data.error || `Added: ${data.name}.`;
+    if (!data.error && panel === mine) $('itemPrompt').value = '';
   } catch { mine.err = true; mine.status = "Couldn't reach the server."; }
   mine.busy = false;
   if (panel === mine) renderDecorPanel();
@@ -1145,6 +1176,12 @@ function drawLabels(now, distance) {
       if (s.visible) pill(`${p.name} · ${STATUS[p.status].label}`, s.x, s.y, STATUS[p.status].color, '#fff', '700 11px system-ui, sans-serif');
     }
   }
+  if (close) for (const it of townItems) {
+    if (Math.hypot(it.x + 0.5 - me.x, it.y + 0.5 - me.y) > 5) continue;
+    const top = it.boxes.reduce((h, b) => Math.max(h, b.z + b.h), 0);
+    const s = scene.screenOf(it.x + 0.5, it.y + 0.5, top + 0.35);
+    if (s.visible) pill(it.name, s.x, s.y, 'rgba(15,12,30,.8)', '#fff', '10px system-ui, sans-serif');
+  }
   for (const p of players.values()) {
     const sitting = chairOf(p);
     const s = scene.screenOf(sitting ? sitting.x + 0.5 : p.x, sitting ? sitting.y + 0.5 : p.y, 1.72 + (p.ride ? RIDES[p.ride].lift : 0));
@@ -1189,7 +1226,11 @@ function draw(now, dt) {
 }
 
 let last = performance.now();
+// Screens that refresh 120 times a second (newer MacBooks) would draw the town
+// twice as often as needed; 60 a second is smooth and halves the work.
+const MIN_FRAME = 1000 / 90; // lets every 60 Hz frame through, skips every other 120 Hz one
 function frame(now) {
+  if (now - last < MIN_FRAME) { requestAnimationFrame(frame); return; }
   const dt = Math.min(0.25, (now - last) / 1000);
   last = now;
   update(dt, now);

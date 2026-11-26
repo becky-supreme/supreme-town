@@ -9,7 +9,7 @@ import { WebSocketServer } from 'ws';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { DESKS, SPAWNS, W, H, ITEMS, RIDES, staticObjects, zoneOf, isShared, hearRadius, DECOR_AREAS } from './public/world.js';
+import { DESKS, SPAWNS, W, H, ITEMS, RIDES, staticObjects, zoneOf, isShared, hearRadius, DECOR_AREAS, decorAreaAt, CHAIRS } from './public/world.js';
 import { PRESETS, BANK, presetFromPrompt, sanitiseDesign } from './public/presets.js';
 import { cleanLook, avatarBoxes, sanitiseCharacter } from './public/avatar.js';
 import { hasNotion, readBotSources, pickSections, friendlyNotionError } from './notion.js';
@@ -143,72 +143,79 @@ What makes a good character:
 Here is an example of the format, a person in a duck costume:
 ${JSON.stringify({ name: 'Duck costume', boxes: avatarBoxes({ outfit: 'duck', skin: '#f2c9a0' }, 'y+', 0, null, null, true).map(({ x, y, z, w, d, h, color, glow }) => ({ x: +x.toFixed(3), y: +y.toFixed(3), z: +z.toFixed(3), w, d, h, color, glow })) })}`;
 
-// ---------- AI area decorating ----------
-const AREA_JSON_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['name', 'sign', 'signColor', 'floorTint', 'boxes'],
-  properties: {
-    name: { type: 'string' }, sign: { type: 'string' }, signColor: { type: 'string' }, floorTint: { type: 'string' },
-    boxes: DESK_JSON_SCHEMA.properties.boxes,
-  },
-};
-const AreaSchema = z.object({
-  name: z.string(), sign: z.string(), signColor: z.string(), floorTint: z.string(),
-  boxes: DeskSchema.shape.boxes,
-});
-const areaFormat = zodOutputFormat(AreaSchema);
-const areaSystem = (area) => {
-  const w = area.rect.x1 - area.rect.x0 + 1, d = area.rect.y1 - area.rect.y0 + 1;
-  return `You decorate one area of a small 3D virtual office with a friendly, blocky toy look, for an occasion or theme a colleague describes (a birthday, Halloween, a product launch, a team win). The area is "${area.name}". You add decorations built from coloured boxes; the furniture already there stays.
+// ---------- adding things to the town (the Decorate button) ----------
+// Someone describes one thing ("a birthday cake with candles") and the AI builds
+// it out of boxes on a single square, next to them or in an area they pick. It
+// doesn't change the room: it's one more thing on the floor, which anyone can
+// take away, and which disappears by itself after a day.
+const ITEM_SYSTEM = `You make single objects for a small 3D virtual office with a friendly, blocky toy look. A colleague describes one thing to add to the office (a birthday cake, a trophy, a pumpkin, a pile of presents, a balloon bunch, a small sign) and you build just that thing out of coloured boxes.
 
 How the space works:
-- The area is ${w} wide (x from 0 to ${w}) and ${d} deep (y from 0 to ${d}). z is height; the ceiling is at 4.
-- Each box is { x, y, z, w, d, h, color, glow }: x, y, z is the corner nearest the origin, w runs along x, d along y, h is height. color is a #rrggbb hex. glow: true makes it light up (fairy lights, neon, candles, lanterns).
-- People walk through this area and there is furniture you can't see, so keep the walking space clear: put decorations up high (z from 2.2 to 3.8: bunting, banners, balloons, streamers, lanterns, disco balls, hanging stars), flat on the floor (h no more than 0.03: confetti, rugs, petals), or small and tucked along the edges (within 0.6 of an edge: balloon clusters, gift piles, pumpkins, pot plants). Nothing in the middle of the floor between z 0.05 and 2.2.
-- Spread decorations across the whole area so it all feels transformed, not just one corner.
+- The object stands on one floor square: x from 0 to 1, y from 0 to 1, z is height from 0 (the floor) up to at most 2.2. People are about 1.6 tall.
+- The camera looks from the +x and +y sides, so put fronts, faces and writing facing +y or +x.
+- Each box is { x, y, z, w, d, h, color, glow }: x, y, z is the corner nearest the origin, w runs along x, d along y, h is height. color is a #rrggbb hex. glow: true makes it light up (candle flames, fairy lights, screens, neon).
+- Boxes must stay inside the square and must not overlap. Nothing floats: every part rests on the floor or on another part. Balloons can sit on thin string boxes.
+- If the thing normally sits on a table (a cake, a vase, a gift), give it a small table or stand of its own so it's at a sensible height.
 
-Also:
-- sign: a short message to hang above the middle of the area, in capitals, four words at most (for example HAPPY BIRTHDAY SAM). Use an empty string for no sign.
-- signColor: a #rrggbb colour for the sign.
-- floorTint: a #rrggbb colour to wash over the floor to set the mood, or an empty string to leave the floor alone.
-- name: a short title for the decoration, four words at most.
-- Use 60 to 160 boxes. Keep every dimension at 0.02 or more.`;
-};
-function sanitiseAreaDecor(raw, area) {
-  const w = area.rect.x1 - area.rect.x0 + 1, d = area.rect.y1 - area.rect.y0 + 1;
+What makes a good object:
+- Recognisable at a glance from its shape and colour, with a few small details (candles on a cake, a ribbon on a present, a face on a pumpkin).
+- Use 6 to 40 boxes. Keep every dimension at 0.02 or more.
+- name is what it is, in four words at most (for example "Birthday cake").
+- Only ever one object (or one small cluster, like a bunch of balloons): never a whole scene or room.`;
+
+function sanitiseItem(raw) {
   const num = (v, lo, hi) => Math.min(hi, Math.max(lo, Number.isFinite(+v) ? +v : lo));
-  const hex = (c) => (/^#[0-9a-fA-F]{6}$/.test(c) ? c : '');
   const boxes = [];
-  for (const b of Array.isArray(raw?.boxes) ? raw.boxes.slice(0, 200) : []) {
-    const bw = num(b.w, 0.02, Math.min(6, w)), bd = num(b.d, 0.02, Math.min(6, d)), bh = num(b.h, 0.01, 4);
-    boxes.push({ x: num(b.x, 0, w - bw), y: num(b.y, 0, d - bd), z: num(b.z, 0, 4 - bh), w: bw, d: bd, h: bh, color: hex(b.color) || '#ffffff', glow: !!b.glow });
+  for (const b of Array.isArray(raw?.boxes) ? raw.boxes.slice(0, 60) : []) {
+    const bw = num(b.w, 0.02, 1), bd = num(b.d, 0.02, 1), bh = num(b.h, 0.02, 2.2);
+    boxes.push({ x: num(b.x, 0, 1 - bw), y: num(b.y, 0, 1 - bd), z: num(b.z, 0, 2.2 - bh), w: bw, d: bd, h: bh, color: /^#[0-9a-fA-F]{6}$/.test(b.color) ? b.color : '#ffffff', glow: !!b.glow });
   }
-  return {
-    name: String(raw?.name || 'Decorations').slice(0, 40),
-    sign: String(raw?.sign || '').replace(/[^\p{L}\p{N} !?&'.,:-]/gu, '').toUpperCase().slice(0, 32),
-    signColor: hex(raw?.signColor) || '#ffd24a',
-    floorTint: hex(raw?.floorTint),
-    boxes,
-  };
+  return { name: String(raw?.name || 'Something new').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 40) || 'Something new', boxes };
 }
-// Decorations are kept for a day, then the area goes back to normal by itself.
-const DECOR_FILE = path.join(DATA, 'area-decor.json');
-const DECOR_HOURS = 24;
-let areaDecor = {};
-try { areaDecor = JSON.parse(fs.readFileSync(DECOR_FILE, 'utf8')); } catch { /* none yet */ }
-// What everyone is sent: the decoration, without who made it (that stays on the server).
-const publicDecor = (d) => { if (!d) return null; const { by, ...rest } = d; return rest; };
-const publicDecorAll = () => Object.fromEntries(Object.entries(areaDecor).map(([k, d]) => [k, publicDecor(d)]));
-function saveAreaDecor() { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(DECOR_FILE, JSON.stringify(areaDecor)); }
-function expireDecor() {
-  for (const [id, dec] of Object.entries(areaDecor)) {
-    if (Date.now() - (dec.at || 0) > DECOR_HOURS * 3_600_000) {
-      delete areaDecor[id];
-      broadcast({ t: 'area', areaId: id, decor: null });
-    }
+
+const ITEMS_FILE = path.join(DATA, 'decor-items.json');
+const ITEM_HOURS = 24, MAX_ITEMS = 60, MAX_PER_AREA = 10;
+let decorItems = []; // [{ id, name, x, y, boxes, at, by }]
+try { decorItems = JSON.parse(fs.readFileSync(ITEMS_FILE, 'utf8')); } catch { /* none yet */ }
+// What everyone is sent: the things, without who made them (that stays on the server).
+const publicItems = () => decorItems.map(({ by, ...rest }) => rest);
+function saveItems() { try { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(ITEMS_FILE, JSON.stringify(decorItems)); } catch (err) { console.error('could not save items:', err.message); } }
+function expireItems() {
+  const before = decorItems.length;
+  decorItems = decorItems.filter((it) => Date.now() - (it.at || 0) < ITEM_HOURS * 3_600_000);
+  if (decorItems.length !== before) { saveItems(); broadcast({ t: 'items', items: publicItems() }); }
+}
+setInterval(expireItems, 5 * 60_000).unref();
+expireItems();
+const designing = new Set(); // people with an item being made right now (one at a time each)
+
+// Squares an item may go on: open floor, not a chair, not where people arrive, not already taken.
+const chairTiles = new Set(CHAIRS.map((c) => `${c.x},${c.y}`));
+const spawnTiles = new Set(SPAWNS.map(([x, y]) => `${x},${y}`));
+function freeForItem(x, y) {
+  const k = `${x},${y}`;
+  return x > 0 && y > 0 && x < W - 1 && y < H - 1 && !solidTiles.has(k) && !chairTiles.has(k) && !spawnTiles.has(k) && !decorItems.some((it) => it.x === x && it.y === y);
+}
+// Next to someone: the square in front of them first, then the others around them.
+function spotNear(x, y, facing) {
+  const fx = Math.floor(x), fy = Math.floor(y);
+  const ahead = { 'x+': [1, 0], 'x-': [-1, 0], 'y+': [0, 1], 'y-': [0, -1] }[facing] || [0, 1];
+  const tries = [ahead];
+  for (let r = 1; r <= 3; r++) for (let dx = -r; dx <= r; dx++) for (let dy = -r; dy <= r; dy++) if (Math.max(Math.abs(dx), Math.abs(dy)) === r) tries.push([dx, dy]);
+  for (const [dx, dy] of tries) if (freeForItem(fx + dx, fy + dy)) return [fx + dx, fy + dy];
+  return null;
+}
+// Somewhere in an area: a free square, preferring the edges so the middle stays clear to walk through.
+function spotInArea(area) {
+  const r = area.rect, spots = [];
+  for (let x = r.x0; x <= r.x1; x++) for (let y = r.y0; y <= r.y1; y++) {
+    if (!freeForItem(x, y)) continue;
+    const edge = Math.min(x - r.x0, r.x1 - x, y - r.y0, r.y1 - y);
+    spots.push({ x, y, score: edge + Math.random() * 1.5 });
   }
-  saveAreaDecor();
+  spots.sort((a, b) => a.score - b.score);
+  return spots.length ? [spots[0].x, spots[0].y] : null;
 }
-setInterval(expireDecor, 5 * 60_000).unref();
 
 async function designCharacter(prompt) {
   const raw = await aiBoxes(CHARACTER_SYSTEM, `Design this character: ${prompt}`);
@@ -472,31 +479,57 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { error: aiErrorMessage(err) });
       }
     }
-    if (url.pathname === '/api/area' && req.method === 'POST') {
+    if (url.pathname === '/api/item' && req.method === 'POST') {
+      // Add one thing, next to you or in an area you pick.
       const body = await readJson(req);
-      const area = DECOR_AREAS.find((a) => a.id === body.areaId);
-      if (!area) return json(res, 404, { error: 'No such area.' });
-      if (body.reset) {
-        delete areaDecor[area.id];
-        saveAreaDecor();
-        broadcast({ t: 'area', areaId: area.id, decor: null });
-        return json(res, 200, { ok: true });
-      }
-      const prompt = clean(body.prompt, 300);
-      if (!prompt) return json(res, 200, { error: 'Describe how to decorate it.' });
+      const prompt = clean(body.prompt, 200);
+      if (!prompt) return json(res, 200, { error: 'Say what you want to add.' });
+      const area = body.areaId ? DECOR_AREAS.find((a) => a.id === body.areaId) : null;
+      if (body.areaId && !area) return json(res, 404, { error: 'No such area.' });
+      if (decorItems.length >= MAX_ITEMS) return json(res, 200, { error: 'The town is full of things already. Take something away first.' });
+      const key = email || 'local';
+      if (designing.has(key)) return json(res, 200, { error: "You're already making something. Wait for it to arrive first." });
+      designing.add(key);
       try {
-        const raw = await aiBoxes(areaSystem(area), `Decorate it for: ${prompt}`, AREA_JSON_SCHEMA, areaFormat);
-        if (!raw) return json(res, 200, { error: 'The AI decorator needs an AI key (see the README).' });
-        const decor = sanitiseAreaDecor(raw, area);
-        if (!decor.boxes.length && !decor.sign) return json(res, 200, { error: "The AI didn't return any decorations. Try again." });
-        areaDecor[area.id] = { ...decor, by: email || null, at: Date.now() };
-        saveAreaDecor();
-        broadcast({ t: 'area', areaId: area.id, decor: publicDecor(areaDecor[area.id]) });
-        return json(res, 200, { ok: true, name: decor.name });
+        const raw = await aiBoxes(ITEM_SYSTEM, `Make this: ${prompt}`);
+        if (!raw) return json(res, 200, { error: 'Adding things needs an AI key (see the README).' });
+        const made = sanitiseItem(raw);
+        if (!made.boxes.length) return json(res, 200, { error: "The AI didn't make anything. Try again." });
+        // Work out where it goes now (not before), since people move while the AI works.
+        let spot = null, where = '';
+        if (area) {
+          if (decorItems.filter((it) => decorAreaAt(it.x, it.y)?.id === area.id).length >= MAX_PER_AREA) return json(res, 200, { error: `${area.name} has plenty of things already. Take one away first.` });
+          spot = spotInArea(area); where = area.name;
+        } else {
+          // Next to you: where the server last saw you, if you're signed in; otherwise where your browser says you are.
+          const p = (email && [...players.values()].find((q) => q.email === email)) || null;
+          const at = p ? [p.x, p.y, p.f] : Array.isArray(body.at) ? [+body.at[0], +body.at[1], String(body.at[2] || '')] : null;
+          if (!at || !Number.isFinite(at[0]) || !Number.isFinite(at[1])) return json(res, 200, { error: 'Walk into town first.' });
+          spot = spotNear(at[0], at[1], at[2]);
+        }
+        if (!spot) return json(res, 200, { error: area ? `There's no free space left in ${area.name}.` : 'There is no free floor right next to you. Step into a more open spot and try again.' });
+        const item = { id: crypto.randomUUID().slice(0, 8), name: made.name, x: spot[0], y: spot[1], boxes: made.boxes, at: Date.now(), by: email || null };
+        decorItems.push(item);
+        saveItems();
+        const who = (email && [...players.values()].find((q) => q.email === email)?.name) || 'Someone';
+        broadcast({ t: 'items', items: publicItems(), added: { id: item.id, name: item.name, who, where: where || decorAreaAt(item.x, item.y)?.name || '' } });
+        return json(res, 200, { ok: true, name: item.name, id: item.id });
       } catch (err) {
-        console.error('area decor error:', err);
+        console.error('item error:', err);
         return json(res, 200, { error: aiErrorMessage(err) });
+      } finally {
+        designing.delete(key);
       }
+    }
+    if (url.pathname === '/api/item/remove' && req.method === 'POST') {
+      // Anyone can tidy something away.
+      const body = await readJson(req);
+      const before = decorItems.length;
+      decorItems = decorItems.filter((it) => it.id !== body.id);
+      if (decorItems.length === before) return json(res, 200, { error: "It's already gone." });
+      saveItems();
+      broadcast({ t: 'items', items: publicItems() });
+      return json(res, 200, { ok: true });
     }
     if (url.pathname === '/api/config') {
       // A bot with nothing to read yet shows a "Needs context" speech bubble in the office.
@@ -604,7 +637,7 @@ wss.on('connection', (ws, req) => {
         x: sx + 0.5, y: sy + 0.5, f: 'y+', email,
         status: ['available', 'meeting', 'busy'].includes(m.status) ? m.status : 'available', muted: !!m.muted, camOff: !!m.camOff, item: ITEMS.includes(m.item) ? m.item : null, ride: Object.hasOwn(RIDES, m.ride) ? m.ride : null, screen: null, dance: false, rec: false, ws,
       };
-      ws.send(JSON.stringify({ t: 'init', id: me.id, you: pub(me), players: [...players.values()].map(pub), desks, areaDecor: publicDecorAll() }));
+      ws.send(JSON.stringify({ t: 'init', id: me.id, you: pub(me), players: [...players.values()].map(pub), desks, items: publicItems() }));
       players.set(me.id, me);
       broadcast({ t: 'join', player: pub(me) }, me.id);
       return;
