@@ -25,6 +25,21 @@ ALLOWED_EMAIL_DOMAIN=supremeopti.com
 # in the data folder, which is all you need.
 SESSION_SECRET=
 
-# Where desks, characters and Notion copies are saved. On Railway, point this
-# at a volume (for example /data) so they survive redeploys.
+# Where desks, characters, Notion copies and Slack connections are saved.
+# On Railway, point this at a volume (for example /data) so they survive redeploys.
 # DATA_DIR=/data
+
+# Slack. Leave these empty and the town still runs: Connect Slack is skipped
+# and nothing is posted. See the Slack section of README.md for the app setup.
+# Bot token (xoxb-) with the chat:write scope. Invite the app to the channel.
+SLACK_BOT_TOKEN=
+# Channel id (C...) for join and leave messages. Not the channel name.
+SLACK_AM_CHANNEL_ID=
+# From the Slack app's Basic Information page. Used for Connect Slack.
+SLACK_CLIENT_ID=
+SLACK_CLIENT_SECRET=
+# Must match a redirect URL on the Slack app, exactly.
+# SLACK_REDIRECT_URL=https://supreme-town-production.up.railway.app/api/slack/callback
+# Optional. How long to wait before saying someone left, so a refresh is not a
+# second "joined". Default is 90 seconds.
+# SLACK_LEAVE_GRACE_MS=90000

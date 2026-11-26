@@ -116,6 +116,37 @@ To get a client ID: Google Cloud Console → APIs & Services → Credentials →
 
 With no client ID, there are no logins and people just type a name. That is only for running it on your own computer.
 
+## Slack
+
+While someone is in the town, their Slack status says **In Supreme Town** (office emoji). When they leave, disconnect, or time out, that status is removed only if it is still the one the town set, so a status they chose themselves is left as they set it. If they already had a status, it is put back. The account managers' channel also gets a plain line, with no @mentions: "Jake has joined Supreme Town" or "Jake has left Supreme Town". A refresh, a second tab, or a short drop does not post twice. The town waits about a minute and a half before saying someone has left.
+
+Connect Slack is required before Enter works. Each person does it once. With Google sign-in, the connection is remembered against their email, on any browser. Without Google sign-in, a long-lived cookie remembers that browser. If Slack later rejects the connection, they are asked again. If the settings below are missing, the server logs a warning, skips the step, and the town still runs.
+
+Connections are saved in the data folder (`DATA_DIR`, the Railway volume at `/data`), encrypted with the session secret. They survive restarts and redeploys. No separate database.
+
+### Slack app
+
+1. Create a Slack app at https://api.slack.com/apps in the Supreme Optimization workspace.
+2. Under **OAuth & Permissions**, add the bot scope `chat:write`.
+3. Add the user scopes `users.profile:read` and `users.profile:write`. The read scope is how the town checks the status is still its own before clearing it.
+4. Add this redirect URL: `https://supreme-town-production.up.railway.app/api/slack/callback`
+5. Install the app to the workspace and copy the **Bot User OAuth Token** (`xoxb-...`). Invite the app into the account managers' channel, and copy that channel's ID (`C...`, from the channel details).
+6. On **Basic Information**, copy the Client ID and Client Secret.
+
+### Railway variables
+
+On the `supreme-town` service, set:
+
+```
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_AM_CHANNEL_ID=C...
+SLACK_CLIENT_ID=...
+SLACK_CLIENT_SECRET=...
+SLACK_REDIRECT_URL=https://supreme-town-production.up.railway.app/api/slack/callback
+```
+
+`SLACK_REDIRECT_URL` has to match the redirect URL in the Slack app exactly. Leave any of them unset and the part that needs them stays off. Each person then opens the town, signs in, and presses **Connect Slack to enter** once.
+
 ## Hosting on Railway
 
 This follows the same pattern as Vista: push to GitHub, and Railway redeploys whenever the main branch changes.

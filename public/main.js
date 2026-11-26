@@ -156,6 +156,7 @@ function connect(profile) {
     send({ t: 'join', ...profile, ...(me ? { name: me.name, look: me.look } : {}), ...where });
   };
   ws.onclose = (e) => {
+    if (e.code === 4403) { location.replace('/?slack=expired'); return; } // Slack needs connecting, or the saved connection was rejected
     if (!me) return;
     if (e.code === 4401 || reconnectTries >= 30) { $('lost').style.display = 'flex'; return; } // signed out, or the server is really gone
     reconnectTries++;
@@ -716,21 +717,26 @@ for (const [part, id] of [['shirt', 'swShirt'], ['hair', 'swHair'], ['skin', 'sw
 }
 drawPreview();
 $('joinName').value = store('hq.name') || '';
+const slackNote = new URLSearchParams(location.search).get('slack');
+if (slackNote) history.replaceState(null, '', location.pathname);
 
 // Signing in. With logins on, your character is saved against your email, so it
 // follows you to any browser. Without them, this browser remembers it.
 function showCharacter(user) {
   $('signin').hidden = true;
   $('joinForm').hidden = false;
-  if (!user) return;
+  if (!user) { refreshSlack(); return; }
   $('signout').hidden = false;
   if (user.name) {
     $('joinText').textContent = `Welcome back, ${user.name}. Change your character here any time.`;
     $('joinName').value = user.name;
-    Object.assign(look, user.look);
+    Object.assign(look, user.look || {});
   } else {
     $('joinText').textContent = `You're in as ${user.email}. Make your character.`;
-    $('joinName').value = user.googleName || '';
+    $('joinName').value = store('hq.name') || user.googleName || '';
+    let draft = null;
+    try { draft = JSON.parse(store('hq.look') || 'null'); } catch { draft = null; }
+    if (draft) Object.assign(look, draft);
   }
   for (const [part, id] of [['shirt', 'swShirt'], ['hair', 'swHair'], ['skin', 'swSkin']]) {
     [...$(id).children].forEach((b, n) => b.classList.toggle('sel', PALETTES[part][n] === look[part]));
@@ -739,7 +745,56 @@ function showCharacter(user) {
     [...$(id).children].forEach((b) => b.classList.toggle('sel', b.dataset.value === look[part]));
   }
   drawPreview();
+  refreshSlack();
 }
+let slackRefresh = 0;
+async function refreshSlack() {
+  const ticket = ++slackRefresh;
+  const go = $('joinGo');
+  const gate = $('slackGate');
+  if (go.textContent === 'Save my look') { go.disabled = false; gate.hidden = true; return; }
+  let s;
+  try { s = await fetch('/api/slack').then((r) => r.json()); } catch { s = null; }
+  if (ticket !== slackRefresh) return;
+  if (go.textContent === 'Save my look') { go.disabled = false; gate.hidden = true; return; }
+  if (!s) {
+    gate.hidden = false;
+    $('slackGateText').textContent = "Couldn't check Slack. Reload the page to try again.";
+    $('slackConnect').hidden = true;
+    go.disabled = true;
+    return;
+  }
+  if (!s.required) { gate.hidden = true; go.disabled = false; return; }
+  gate.hidden = false;
+  $('slackConnect').hidden = !!s.connected;
+  if (s.connected) {
+    $('slackGateText').textContent = 'Slack connected. You only have to do this once.';
+    $('slackStatus').textContent = slackNote === 'connected' ? 'You can enter Supreme Town.' : '';
+    $('slackStatus').className = 'status';
+    go.disabled = false;
+  } else {
+    $('slackGateText').textContent = slackNote === 'expired'
+      ? 'Connect Slack to enter. If you connected before, that connection needs to be renewed.'
+      : slackNote === 'denied'
+        ? 'Slack was not connected. Connect Slack to enter.'
+        : 'Connect Slack to enter. This is once per person, and your status will show you are here.';
+    $('slackStatus').textContent = slackNote === 'error' ? "That didn't work. Try connecting again." : '';
+    $('slackStatus').className = slackNote === 'error' || slackNote === 'denied' ? 'status err' : 'status';
+    go.disabled = true;
+  }
+}
+$('slackConnect').addEventListener('click', async (e) => {
+  const name = $('joinName').value.trim();
+  store('hq.name', name);
+  store('hq.look', JSON.stringify(look));
+  if (!name) return;
+  e.preventDefault();
+  await Promise.race([
+    fetch('/api/profile', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, look }) }).catch(() => {}),
+    new Promise((r) => setTimeout(r, 1500)),
+  ]);
+  location.href = $('slackConnect').href;
+});
 async function startSignIn() {
   const info = await fetch('/api/me').then((r) => r.json());
   if (!info.authRequired || info.user) return showCharacter(info.user);
@@ -790,11 +845,14 @@ $('btnLook').onclick = () => {
   for (const [part, id] of [['shirt', 'swShirt'], ['hair', 'swHair'], ['skin', 'swSkin']]) [...$(id).children].forEach((b, n) => b.classList.toggle('sel', PALETTES[part][n] === look[part]));
   for (const [part, id] of [['outfit', 'swOutfit'], ['hairStyle', 'swHairStyle']]) [...$(id).children].forEach((b) => b.classList.toggle('sel', !look.custom && b.dataset.value === look[part]));
   drawPreview();
+  $('slackGate').hidden = true;
+  $('joinGo').disabled = false;
   $('join').style.display = 'flex';
 };
 
 $('joinForm').onsubmit = async (e) => {
   e.preventDefault();
+  if ($('joinGo').disabled) return;
   sound.start();
   const name = $('joinName').value.trim();
   if (!name) return;
