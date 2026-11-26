@@ -49,6 +49,9 @@ function harness(env = FULL) {
   let profile = { status_text: 'Lunch', status_emoji: ':sandwich:', status_expiration: 0 };
   let auth = { ok: true, user_id: 'U123' };
   let oauth = { ok: true, authed_user: { id: 'U123', access_token: TOKEN, scope: 'users.profile:read,users.profile:write', token_type: 'user' } };
+  // null: channel setup fails closed, and posts stay on the account managers' channel.
+  // An object turns on the private #supreme-town channel for these tests.
+  let town = null;
   const keys = sealer(() => clock);
   async function fetchImpl(url, opts = {}) {
     let body = {};
@@ -67,6 +70,29 @@ function harness(env = FULL) {
       return send({ ok: true, profile: { ...profile } });
     }
     if (href.endsWith('/chat.postMessage')) return send({ ok: true, ts: '1' });
+    if (href.endsWith('/conversations.create')) {
+      if (!town) return send({ ok: false, error: 'unknown_method' });
+      if (town.fail === 'missing_scope') return send({ ok: false, error: 'missing_scope' });
+      if (town.fail === 'name_taken' || town.created) return send({ ok: false, error: 'name_taken' });
+      town.created = true;
+      return send({ ok: true, channel: { id: town.id, name: 'supreme-town', is_private: true } });
+    }
+    if (href.endsWith('/conversations.list')) {
+      if (!town?.listed) return send({ ok: false, error: 'missing_scope' });
+      return send({ ok: true, channels: [{ id: town.id, name: 'supreme-town', is_private: true, is_archived: false }] });
+    }
+    if (href.endsWith('/conversations.info')) {
+      if (!town || town.missing) return send({ ok: false, error: town?.missing ? 'channel_not_found' : 'unknown_method' });
+      return send({ ok: true, channel: { id: town.id, name: 'supreme-town', is_private: true, is_archived: !!town.archived } });
+    }
+    if (href.endsWith('/conversations.invite')) {
+      if (!town) return send({ ok: false, error: 'unknown_method' });
+      if (town.inviteError) return send({ ok: false, error: town.inviteError });
+      const user = String(body.users || '');
+      if (town.members.has(user)) return send({ ok: false, error: 'already_in_channel' });
+      town.members.add(user);
+      return send({ ok: true, channel: { id: town.id } });
+    }
     return send({ ok: false, error: 'unknown_method' });
   }
   function make(over = {}) {
@@ -88,6 +114,10 @@ function harness(env = FULL) {
   }
   return {
     dir, logs, calls, timers, keys, make,
+    useTown(over = {}) {
+      town = { id: 'G0TOWNCHAN1', members: new Set(), created: false, listed: false, fail: null, inviteError: null, ...over };
+      return town;
+    },
     now: () => clock,
     advance: (ms) => { clock += ms; },
     get profile() { return profile; },
@@ -95,6 +125,8 @@ function harness(env = FULL) {
     set auth(a) { auth = a; },
     set oauth(o) { oauth = o; },
     posts: () => calls.filter((c) => c.href.endsWith('/chat.postMessage')).map((c) => c.body),
+    invites: () => calls.filter((c) => c.href.endsWith('/conversations.invite')).map((c) => c.body),
+    creates: () => calls.filter((c) => c.href.endsWith('/conversations.create')).map((c) => c.body),
     sets: () => calls.filter((c) => c.href.endsWith('/users.profile.set')).map((c) => c.body.profile),
     async fire() {
       const item = timers.find((t) => !t.cleared && !t.ran);
@@ -150,7 +182,7 @@ test('connect once, remember it, and do not log the token', async () => {
   const state = url.searchParams.get('state');
   const wrong = await slack.finishConnect({ code: 'abc', state, identity: identityFor({ email: 'other@supremeopti.com' }) });
   assert.equal(wrong.ok, false);
-  assert.equal(h.calls.length, 0);
+  assert.equal(h.calls.some((c) => c.href.endsWith('/oauth.v2.access')), false);
   const good = await slack.finishConnect({ code: 'abc', state, identity: jake });
   assert.equal(good.ok, true);
   const raw = fs.readFileSync(path.join(h.dir, 'slack-connections.json'), 'utf8');
@@ -247,7 +279,7 @@ test('oauth failure is logged as a code, not a token', async () => {
   const state = new URL(slack.authorizeUrl(jake)).searchParams.get('state');
   const result = await slack.finishConnect({ code: 'abc', state, identity: jake });
   assert.equal(result.ok, false);
-  assert.deepEqual(h.logs, ['Slack connection failed (invalid_client)']);
+  assert.ok(h.logs.includes('Slack connection failed (invalid_client)'));
   clean(h.logs);
 });
 
@@ -261,6 +293,98 @@ test('device cookie is the identity when there is no account', () => {
   assert.equal(readDeviceId(cookie, keys.unseal), did);
   assert.equal(identityFor({ deviceId: did }), `device:${did}`);
   assert.equal(readDeviceId('hq_device=tampered', keys.unseal), null);
+});
+
+test('a private supreme-town channel gets the posts, and creating it twice reuses the saved id', async () => {
+  const h = harness();
+  const town = h.useTown();
+  const first = h.make();
+  const state = new URL(first.authorizeUrl(jake)).searchParams.get('state');
+  await first.finishConnect({ code: 'abc', state, identity: jake });
+  assert.equal(h.creates().length, 1);
+  assert.equal(h.creates()[0].name, 'supreme-town');
+  assert.equal(h.creates()[0].is_private, true);
+  assert.deepEqual(h.invites(), [{ channel: town.id, users: 'U123' }]);
+  await first.arrived({ identity: jake, name: 'Jake' });
+  await first.arrived({ identity: jake, name: 'Jake' });
+  assert.equal(h.invites().length, 1); // already invited in this run
+  assert.deepEqual(h.posts().map((p) => p.channel), [town.id]);
+  const saved = JSON.parse(fs.readFileSync(path.join(h.dir, 'slack-town-channel.json'), 'utf8'));
+  assert.equal(saved.id, town.id);
+  assert.equal(JSON.stringify(saved).includes(BOT), false);
+  first.pauseForRestart();
+  const second = h.make();
+  await second.arrived({ identity: jake, name: 'Jake' });
+  assert.equal(h.creates().length, 1); // saved id, no second create
+  assert.equal(h.invites().length, 2);
+  assert.equal(h.invites()[1].users, 'U123');
+  assert.equal(town.members.size, 1);
+  assert.deepEqual(h.posts().map((p) => p.text), ['Jake has joined Supreme Town']);
+  clean(h.logs);
+});
+
+test('an existing private channel is found, and already_in_channel is not an error', async () => {
+  const h = harness();
+  const town = h.useTown({ fail: 'name_taken', listed: true });
+  town.members.add('U123');
+  const slack = h.make();
+  const state = new URL(slack.authorizeUrl(jake)).searchParams.get('state');
+  await slack.finishConnect({ code: 'abc', state, identity: jake });
+  assert.equal(h.creates()[0].is_private, true);
+  assert.equal(h.calls.some((c) => c.href.endsWith('/conversations.list')), true);
+  assert.equal(h.creates().length, 1);
+  const saved = JSON.parse(fs.readFileSync(path.join(h.dir, 'slack-town-channel.json'), 'utf8'));
+  assert.equal(saved.id, town.id);
+  assert.equal(h.invites().length, 1);
+  assert.equal(town.members.size, 1);
+  await slack.arrived({ identity: jake, name: 'Jake' });
+  assert.equal(h.posts()[0].channel, town.id);
+  assert.equal(h.logs.some((l) => /token|xox[bp]-/.test(l)), false);
+  clean(h.logs);
+});
+
+test('startup invites everyone already connected, and a missing scope is retried next start', async () => {
+  const h = harness();
+  const town = h.useTown();
+  const first = h.make();
+  const state = new URL(first.authorizeUrl(jake)).searchParams.get('state');
+  await first.finishConnect({ code: 'abc', state, identity: jake });
+  first.pauseForRestart();
+  town.members.clear(); // the saved connection is what the next start knows, not Slack's memory
+  const second = h.make();
+  await second.arrived({ identity: jake, name: 'Bea' });
+  const backfill = h.invites().filter((c) => c.users === 'U123');
+  assert.ok(backfill.length >= 2); // connect, then backfill on the next start
+  assert.equal(h.posts().at(-1).channel, town.id);
+
+  const blocked = harness();
+  blocked.useTown({ fail: 'missing_scope' });
+  const slack = blocked.make();
+  const again = new URL(slack.authorizeUrl(jake)).searchParams.get('state');
+  await slack.finishConnect({ code: 'abc', state: again, identity: jake });
+  await slack.arrived({ identity: jake, name: 'Jake' });
+  assert.ok(blocked.logs.some((l) => l.includes('missing_scope') && l.includes('groups:write')));
+  assert.equal(blocked.posts()[0].channel, 'C0123456789');
+  assert.equal(blocked.invites().length, 0);
+  assert.equal(fs.existsSync(path.join(blocked.dir, 'slack-town-channel.json')), false);
+  const retry = blocked.make();
+  await retry.arrived({ identity: jake, name: 'Jake' });
+  assert.equal(blocked.creates().length, 2); // next start tries again
+  clean(h.logs);
+  clean(blocked.logs);
+});
+
+test('SLACK_TOWN_CHANNEL_ID is used as given and is not created again', async () => {
+  const h = harness({ ...FULL, SLACK_TOWN_CHANNEL_ID: 'C0TOWNCHAN1' });
+  h.useTown();
+  const slack = h.make();
+  const state = new URL(slack.authorizeUrl(jake)).searchParams.get('state');
+  await slack.finishConnect({ code: 'abc', state, identity: jake });
+  await slack.arrived({ identity: jake, name: 'Jake' });
+  assert.equal(h.creates().length, 0);
+  assert.equal(h.invites()[0].channel, 'C0TOWNCHAN1');
+  assert.equal(h.posts()[0].channel, 'C0TOWNCHAN1');
+  clean(h.logs);
 });
 
 test('the door tells people to connect Slack before they can enter', () => {

@@ -111,3 +111,52 @@ test('entry gate follows the Slack settings', async () => {
     await gated.stop();
   }
 });
+
+test('confetti is shown to someone nearby and then waits', async () => {
+  const srv = start(38923, {});
+  const sockets = [];
+  try {
+    await srv.ready;
+    const enter = (name) => new Promise((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:38923`);
+      sockets.push(ws);
+      const inbox = [];
+      const timer = setTimeout(() => reject(new Error('no init')), 5000);
+      ws.on('message', (raw) => {
+        const m = JSON.parse(raw.toString());
+        inbox.push(m);
+        if (m.t === 'init') { clearTimeout(timer); resolve({ ws, inbox, id: m.you.id }); }
+      });
+      ws.on('error', reject);
+      ws.on('open', () => ws.send(JSON.stringify({ t: 'join', name, look: {} })));
+    });
+    const ada = await enter('Ada');
+    const bea = await enter('Bea');
+    const waitFor = (box, pred, ms = 2000) => new Promise((resolve) => {
+      const start = box.inbox.length;
+      let done = false;
+      const finish = (value) => { if (done) return; done = true; clearTimeout(timer); resolve(value); };
+      const timer = setTimeout(() => finish(null), ms);
+      const tick = () => {
+        if (done) return;
+        const hit = box.inbox.slice(start).find(pred);
+        if (hit) { finish(hit); return; }
+        setTimeout(tick, 20);
+      };
+      tick();
+    });
+    ada.ws.send(JSON.stringify({ t: 'confetti', to: bea.id }));
+    const first = await waitFor(bea, (m) => m.t === 'confetti');
+    assert.equal(first.from, ada.id);
+    assert.equal(first.to, bea.id);
+    assert.equal(first.name, 'Ada');
+    assert.equal(first.toName, 'Bea');
+    ada.ws.send(JSON.stringify({ t: 'confetti', to: bea.id }));
+    const extra = await waitFor(bea, (m) => m.t === 'confetti' && m.at !== first.at, 400);
+    assert.equal(extra, null);
+    assert.equal(ada.inbox.some((m) => m.t === 'confetti'), false);
+  } finally {
+    for (const ws of sockets) { try { ws.close(); } catch { /* already closing */ } }
+    await srv.stop();
+  }
+});

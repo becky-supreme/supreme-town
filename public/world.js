@@ -29,6 +29,15 @@ export function zoneOf(x, y) {
 }
 export const isShared = (zone) => zone !== 'floor' && zone !== 'desks';
 export const hearRadius = (zone) => (zone === 'desks' ? DESK_RADIUS : HEAR_RADIUS);
+// Same places a voice can carry, including the extra squares calls already allow
+// at the edge. Shared rooms count the whole room. Status (in a meeting, busy)
+// is not part of this: it is only about where the two people are standing.
+export function spatiallyNear(a, b, slack = 2.5) {
+  if (!a || !b || !Number.isFinite(a.x) || !Number.isFinite(a.y) || !Number.isFinite(b.x) || !Number.isFinite(b.y)) return false;
+  const za = zoneOf(a.x, a.y), zb = zoneOf(b.x, b.y);
+  if (isShared(za) || isShared(zb)) return za === zb;
+  return Math.hypot(a.x - b.x, a.y - b.y) <= Math.min(hearRadius(za), hearRadius(zb)) + slack;
+}
 
 // Each team gets a 12-wide block: six open desks, a receptionist spot by the
 // corridor and a small social corner. Top-row teams sit against the back wall.
