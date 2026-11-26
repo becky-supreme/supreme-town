@@ -6,6 +6,7 @@ import { drawBox } from './iso.js';
 import { createScene } from './scene3d.js';
 import { avatarBoxes, OUTFITS, HAIRSTYLES } from './avatar.js';
 import { createRTC } from './rtc.js';
+import { createMusic } from './music.js';
 import { createArcade } from './arcade.js';
 
 const $ = (id) => document.getElementById(id);
@@ -158,10 +159,11 @@ function connect(profile) {
   ws.onclose = (e) => {
     if (e.code === 4403) { location.replace('/?slack=expired'); return; } // Slack needs connecting, or the saved connection was rejected
     if (!me) return;
-    if (e.code === 4401 || reconnectTries >= 30) { $('lost').style.display = 'flex'; return; } // signed out, or the server is really gone
+    if (e.code === 4401 || reconnectTries >= 30) { music.stop(); $('lost').style.display = 'flex'; return; } // signed out, or the server is really gone
     reconnectTries++;
     $('reconnecting').style.display = 'block';
     rtc.closeAll();
+    music.closeAll();
     setTimeout(() => connect(profile), Math.min(5000, 1000 + reconnectTries * 500));
   };
   ws.onmessage = (e) => {
@@ -179,6 +181,8 @@ function connect(profile) {
       me.rec = recorder.active();
       players.set(me.id, me);
       if (back && me.rec) sendState();
+      if (back) music.reannounce();
+      music.update();
       if (!back) {
         cam.x = me.x; cam.y = me.y;
         introStart = performance.now();
@@ -200,6 +204,7 @@ function connect(profile) {
       dmUnread.delete(m.id);
       if (panel?.kind === 'dm' && panel.id === m.id) { toast(`${p?.name || 'They'} left town.`); openPeople(); }
       rtc.drop(m.id);
+      music.update(); // their music stops as soon as they leave
       updateCount();
     } else if (m.t === 'move') {
       const p = players.get(m.id);
@@ -252,6 +257,8 @@ function connect(profile) {
       arcade.handle(m);
     } else if (m.t === 'signal') {
       rtc.handleSignal(m.from, m.data, me, players).catch((err) => console.warn('call set-up failed', err));
+    } else if (m.t === 'music' || m.t === 'music-signal') {
+      music.handle(m);
     } else if (m.t === 'items') {
       townItems = m.items || [];
       scene.setItems(townItems);
@@ -538,6 +545,9 @@ function toast(text, actions = [], ms = 6000) {
   $('toasts').append(t);
   setTimeout(() => t.remove(), ms);
 }
+// Music from someone's computer, heard by whoever can already hear them.
+const music = createMusic({ send: (msg) => send(msg), toast, getMe: () => me, getPlayers: () => players });
+window.__hq.music = music;
 $('btnSound').onclick = () => { sound.setMuted(!sound.isMuted()); if (me) applyMedia(); };
 $('btnDecor').onclick = () => openDecor();
 
@@ -658,6 +668,7 @@ async function setStatus(status) {
   if (!wasQuiet && me.meeting) {
     if (recorder.active()) { recorder.stop(); toast('Recording saved to your Downloads.'); }
     stopShare();
+    music.stop();
     // Hang up on everyone and let go of the mic and camera so another call can use them.
     rtc.closeAll();
     localStream?.getTracks().forEach((t) => t.stop());
@@ -666,6 +677,7 @@ async function setStatus(status) {
   }
   applyMedia();
   sendState();
+  music.update();
   if (wasQuiet && !me.meeting) {
     const stream = await acquireMedia();
     if (me.meeting) { stream?.getTracks().forEach((t) => t.stop()); return; }
@@ -892,7 +904,7 @@ rebuildObjects();
 // ---------- input ----------
 function typing() { return ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName); }
 addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { arcade.close(); closePanel(); document.activeElement?.blur(); return; }
+  if (e.key === 'Escape') { arcade.close(); closePanel(); music.closePrompt(); document.activeElement?.blur(); return; }
   if (typing() || !me || arcade.isOpen()) return; // the arcade has the keyboard while you play
   if (e.key === 'Enter') { $('chatInput').focus(); e.preventDefault(); return; }
   if (e.key === 'e' || e.key === 'E') { if (near) interact(near); return; }
@@ -1161,7 +1173,7 @@ function update(dt, now) {
   const area = showSquares ? (hover && hover[0] >= 0 ? `Square ${hover[0]}, ${hover[1]}` : 'Point at the floor') : areaAt(me.x, me.y) + (isShared(zoneOf(me.x, me.y)) ? ' · everyone here can hear you' : '');
   if (area !== lastArea) { lastArea = area; $('where').textContent = area; $('where').style.display = 'block'; }
 }
-setInterval(() => { if (me) { rtc.update(me, players); updateRecNotice(); } }, 250);
+setInterval(() => { if (me) { rtc.update(me, players); music.update(); updateRecNotice(); } }, 250);
 
 // ---------- drawing ----------
 function resize() {
@@ -1250,6 +1262,7 @@ function drawLabels(now, distance) {
     let up = 19;
     if (p.meeting && !atDesk.has(p)) { pill(STATUS[p.status].label, s.x, s.y - up, STATUS[p.status].color); up += 19; }
     if (p.rec) { pill('● Recording', s.x, s.y - up, '#ef4d5a', '#fff', '700 11px system-ui, sans-serif'); up += 19; }
+    if (p.music && !p.meeting) { pill('♪ Music', s.x, s.y - up, '#8b5cf6'); up += 19; }
     if (p.bubble && p.bubble.until > now) bubble(p.bubble.text, s.x, s.y - up + 4);
     else if (p.emoteUntil && p.emoteUntil > now) bubble('👋', s.x, s.y - up + 4);
   }

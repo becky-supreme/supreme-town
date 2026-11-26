@@ -10,6 +10,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { DESKS, SPAWNS, W, H, ITEMS, RIDES, staticObjects, zoneOf, isShared, hearRadius, DECOR_AREAS, decorAreaAt, CHAIRS } from './public/world.js';
+import { musicConflict } from './public/music-rules.js';
 import { PRESETS, BANK, presetFromPrompt, sanitiseDesign } from './public/presets.js';
 import { cleanLook, avatarBoxes, sanitiseCharacter } from './public/avatar.js';
 import { hasNotion, readBotSources, pickSections, friendlyNotionError } from './notion.js';
@@ -410,7 +411,25 @@ function leaveCabinets(id) {
     tellCabinet(cab);
   }
 }
-const pub = (p) => ({ id: p.id, name: p.name, look: p.look, x: p.x, y: p.y, f: p.f, status: p.status, muted: p.muted, camOff: p.camOff, item: p.item, ride: p.ride, screen: p.screen, dance: p.dance, rec: !!p.rec });
+const pub = (p) => ({ id: p.id, name: p.name, look: p.look, x: p.x, y: p.y, f: p.f, status: p.status, muted: p.muted, camOff: p.camOff, item: p.item, ride: p.ride, screen: p.screen, dance: p.dance, rec: !!p.rec, music: p.music || null, musicLabel: p.musicLabel || null });
+// One person plays music in a shared room, or within earshot out in the open.
+// The stream id is the browser's own id (letters, numbers, dots and dashes).
+function musicStreamId(s) {
+  const t = clean(s, 80);
+  return /^[A-Za-z0-9._-]{1,80}$/.test(t) ? t : '';
+}
+function publishMusic(p, extra = {}) {
+  broadcast({ t: 'music', id: p.id, music: p.music || null, musicLabel: p.musicLabel || null, ...extra });
+}
+function clearMusic(p, stopped, by) {
+  if (!p.music) return;
+  p.music = null;
+  p.musicLabel = null;
+  const msg = { t: 'music', id: p.id, music: null, musicLabel: null };
+  if (stopped) msg.stopped = stopped;
+  if (by) msg.by = by;
+  broadcast(msg);
+}
 function broadcast(msg, exceptId) {
   const s = JSON.stringify(msg);
   for (const p of players.values()) if (p.id !== exceptId && p.ws.readyState === 1) p.ws.send(s);
@@ -718,7 +737,7 @@ wss.on('connection', (ws, req) => {
             name,
             look: (email && users.get(email)?.look) || cleanLook(m.look),
             x: sx + 0.5, y: sy + 0.5, f: 'y+', email,
-            status: ['available', 'meeting', 'busy'].includes(m.status) ? m.status : 'available', muted: !!m.muted, camOff: !!m.camOff, item: ITEMS.includes(m.item) ? m.item : null, ride: Object.hasOwn(RIDES, m.ride) ? m.ride : null, screen: null, dance: false, rec: false, ws,
+            status: ['available', 'meeting', 'busy'].includes(m.status) ? m.status : 'available', muted: !!m.muted, camOff: !!m.camOff, item: ITEMS.includes(m.item) ? m.item : null, ride: Object.hasOwn(RIDES, m.ride) ? m.ride : null, screen: null, dance: false, rec: false, music: null, musicLabel: null, ws,
             slackIdentity: presenceKey(who, name),
           };
           if (!alive || ws.readyState !== 1) { me = null; return; }
@@ -742,6 +761,10 @@ wss.on('connection', (ws, req) => {
       if (!moveAllowed(me, x, y)) return ws.send(JSON.stringify({ t: 'pos', x: me.x, y: me.y })); // put them back where we have them
       me.x = x; me.y = y; me.f = ['x+', 'x-', 'y+', 'y-'].includes(m.f) ? m.f : me.f;
       broadcast({ t: 'move', id: me.id, x, y, f: me.f }, me.id);
+      if (me.music) {
+        const other = musicConflict(me, players.values());
+        if (other) clearMusic(me, 'room', other.name);
+      }
     } else if (m.t === 'look') {
       // changing your character while you are in town
       me.look = cleanLook(m.look);
@@ -757,6 +780,7 @@ wss.on('connection', (ws, req) => {
       me.dance = !!m.dance;
       me.rec = !!m.rec && me.status === 'available'; // recording a call (saved on their own computer)
       broadcast({ t: 'state', id: me.id, status: me.status, muted: me.muted, camOff: me.camOff, item: me.item, ride: me.ride, screen: me.screen, dance: me.dance, rec: me.rec }, me.id);
+      if (me.status !== 'available') clearMusic(me, 'status');
     } else if (m.t === 'poke') {
       // Waving at someone, or inviting them over. Everyone sees a wave; only the
       // person it's for gets told. Nobody can send more than one every 2 seconds,
@@ -806,6 +830,28 @@ wss.on('connection', (ws, req) => {
       if (!to || to.ws.readyState !== 1 || !data) return;
       if (!data.bye && !canHear(me, to)) return; // hanging up is always allowed; calling needs earshot
       to.ws.send(JSON.stringify({ t: 'signal', from: me.id, data }));
+    } else if (m.t === 'music') {
+      // Shared music follows the same rooms as voice. One player at a time in each.
+      if (!m.on || me.status !== 'available') {
+        clearMusic(me, me.status !== 'available' && m.on ? 'status' : null);
+        return;
+      }
+      const id = musicStreamId(m.id);
+      if (!id) return ws.send(JSON.stringify({ t: 'music', id: me.id, music: null, musicLabel: null }));
+      const other = musicConflict(me, players.values());
+      if (other) return ws.send(JSON.stringify({ t: 'music', id: me.id, music: null, musicLabel: null, denied: true, by: other.name }));
+      me.music = id;
+      me.musicLabel = clean(m.label, 80);
+      publishMusic(me);
+    } else if (m.t === 'music-signal') {
+      // A separate call from voice, so music can stay stereo and skip the mic processing.
+      // Only relayed when one of the two is actually sharing, and only inside earshot.
+      const to = players.get(m.to);
+      const data = cleanSignal(m.data);
+      if (!to || to.ws.readyState !== 1 || !data) return;
+      if (!data.bye && !canHear(me, to)) return;
+      if (!data.bye && !me.music && !to.music) return;
+      to.ws.send(JSON.stringify({ t: 'music-signal', from: me.id, data }));
     }
   });
   ws.on('close', () => {
